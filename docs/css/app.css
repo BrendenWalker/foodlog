@@ -1,0 +1,377 @@
+:root {
+  color-scheme: dark;
+  --bg: #141614;
+  --surface: #1c201c;
+  --text: #f3f0e8;
+  --muted: #b7b2a8;
+  --line: #2e342f;
+  --accent: #9dceae;
+  --accent-fill: #1a7348;
+  --on-accent: #f4faf6;
+  --over: #f0a090;
+  --danger: #ff9aa8;
+  --bar-track: #2a2e2a;
+  --input-border: #3a403c;
+  --undo-bg: #e8e4dc;
+  --undo-text: #141614;
+  --nav-h: 56px;
+  --app-width: 520px;
+  --safe-b: env(safe-area-inset-bottom);
+  --safe-t: env(safe-area-inset-top);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+}
+
+body {
+  max-width: var(--app-width);
+  margin: 0 auto;
+  min-height: 100dvh;
+  padding-top: var(--safe-t);
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+button,
+input {
+  font: inherit;
+  touch-action: manipulation;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.back-btn {
+  min-height: 44px;
+  min-width: 64px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+main {
+  padding: 0 16px calc(var(--nav-h) + var(--safe-b) + 28px);
+}
+
+body.undo-open main {
+  padding-bottom: calc(var(--nav-h) + var(--safe-b) + 88px);
+}
+
+h2 {
+  margin: 22px 0 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status-main {
+  margin: 8px 0 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-sub {
+  margin: 4px 0 12px;
+  font-size: 1.75rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-sub.over {
+  color: var(--over);
+}
+
+.bar {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bar-track);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.bar.over .bar-fill {
+  width: 100%;
+  background: var(--over);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row,
+.day-row,
+.food-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.row-main,
+.food-name,
+.entry-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-name,
+.food-name,
+.entry-name,
+.day-date {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-meta,
+.food-cal,
+.entry-cal,
+.entry-time,
+.day-meta {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.add-btn,
+.remove-btn {
+  min-height: 44px;
+  min-width: 64px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.remove-btn {
+  border-color: var(--line);
+  color: var(--danger);
+}
+
+.day-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wide,
+.search,
+label,
+.inline-field {
+  display: block;
+  width: 100%;
+}
+
+label {
+  margin-top: 12px;
+  margin-bottom: 6px;
+  font-weight: 650;
+}
+
+.search,
+input {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 16px;
+  color: var(--text);
+}
+
+.wide {
+  min-height: 48px;
+  margin: 12px 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.wide.secondary {
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.wide.danger {
+  background: var(--surface);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-field input {
+  flex: 1;
+}
+
+.summary {
+  margin-top: 16px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-row strong {
+  font-weight: 750;
+}
+
+.summary-row.over {
+  color: var(--over);
+  font-weight: 700;
+}
+
+.empty,
+.hint {
+  color: var(--muted);
+  margin: 8px 0;
+}
+
+.error {
+  color: var(--danger);
+  margin: 6px 0 0;
+  font-size: 0.95rem;
+}
+
+.tabbar,
+.undo {
+  position: fixed;
+  left: 50%;
+  width: min(var(--app-width), 100%);
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+.tabbar {
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  height: calc(var(--nav-h) + var(--safe-b));
+  padding-bottom: var(--safe-b);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+.tabbar button {
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.tabbar button[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.undo {
+  bottom: calc(var(--nav-h) + var(--safe-b) + 8px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(calc(var(--app-width) - 24px), calc(100% - 24px));
+  padding: 8px 8px 8px 14px;
+  border-radius: 12px;
+  background: var(--undo-bg);
+  color: var(--undo-text);
+  z-index: 4;
+}
+
+.undo button {
+  min-height: 44px;
+  min-width: 72px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--undo-text);
+  font-weight: 750;
+}

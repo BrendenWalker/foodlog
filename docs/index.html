@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Calories" />
+    <meta name="theme-color" content="#141614" />
+    <title>Calorie Tracker</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="icons/icon-180.png" />
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <button type="button" id="back-btn" class="back-btn" hidden>Back</button>
+      <h1 id="screen-title">Today</h1>
+    </header>
+
+    <main id="main">
+      <section id="view-today" data-view="today">
+        <div class="status">
+          <p class="status-main" id="status-main">0 / 2,000 kcal</p>
+          <p class="status-sub" id="status-sub" aria-live="polite">2,000 kcal remaining</p>
+          <div
+            class="bar"
+            id="status-bar"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="2000"
+            aria-valuenow="0"
+            aria-label="Calories consumed today"
+          >
+            <div class="bar-fill" id="status-fill"></div>
+          </div>
+        </div>
+        <p id="today-error" class="error" hidden></p>
+
+        <h2>Recently Used</h2>
+        <ul id="recent-list" class="rows"></ul>
+        <p id="recent-empty" class="empty" hidden>No recent foods yet.</p>
+        <button type="button" id="add-from-library" class="wide">Add from Library</button>
+
+        <h2>Today's Entries</h2>
+        <ul id="today-entries" class="rows"></ul>
+        <p id="today-empty" class="empty" hidden>Nothing logged today.</p>
+      </section>
+
+      <section id="view-history" data-view="history" hidden>
+        <ul id="history-list" class="rows"></ul>
+        <p id="history-empty" class="empty" hidden>No history yet.</p>
+      </section>
+
+      <section id="view-day" data-view="day" hidden>
+        <ul id="day-entries" class="rows"></ul>
+        <div id="day-summary" class="summary"></div>
+      </section>
+
+      <section id="view-library" data-view="library" hidden>
+        <input id="library-search" class="search" type="search" placeholder="Search foods" enterkeyhint="search" aria-label="Search foods" />
+        <button type="button" id="add-food" class="wide">+ Add Food</button>
+        <ul id="library-list" class="rows"></ul>
+        <p id="library-empty" class="empty" hidden>No foods yet.</p>
+      </section>
+
+      <section id="view-food-form" data-view="food-form" hidden>
+        <form id="food-form">
+          <label for="food-name">Name</label>
+          <input id="food-name" autocomplete="off" enterkeyhint="next" />
+          <p id="food-name-error" class="error" hidden></p>
+
+          <label for="food-calories">Calories</label>
+          <input id="food-calories" inputmode="numeric" autocomplete="off" enterkeyhint="done" />
+          <p id="food-cal-error" class="error" hidden></p>
+
+          <button type="submit" class="wide">Save</button>
+        </form>
+        <button type="button" id="delete-food" class="wide danger" hidden>Delete Food</button>
+      </section>
+
+      <section id="view-select" data-view="select" hidden>
+        <input id="select-search" class="search" type="search" placeholder="Search foods" enterkeyhint="search" aria-label="Search foods" />
+        <ul id="select-list" class="rows"></ul>
+        <p id="select-empty" class="empty" hidden>No foods yet.</p>
+      </section>
+
+      <section id="view-settings" data-view="settings" hidden>
+        <form id="target-form">
+          <label for="target-input">Daily Calorie Target</label>
+          <div class="inline-field">
+            <input id="target-input" inputmode="numeric" autocomplete="off" enterkeyhint="done" />
+            <span>kcal</span>
+          </div>
+          <p id="target-error" class="error" hidden></p>
+          <button type="submit" class="wide">Save</button>
+        </form>
+        <button type="button" id="export-btn" class="wide secondary">Export Data</button>
+        <button type="button" id="import-btn" class="wide secondary">Import Data</button>
+        <input id="import-file" type="file" accept="application/json,.json" hidden />
+        <p id="settings-msg" class="hint" role="status"></p>
+      </section>
+    </main>
+
+    <div id="undo" class="undo" hidden>
+      <span id="undo-label">Removed</span>
+      <button type="button" id="undo-btn">Undo</button>
+    </div>
+
+    <nav class="tabbar" aria-label="Primary">
+      <button type="button" data-tab="today" aria-current="page">Today</button>
+      <button type="button" data-tab="library">Library</button>
+      <button type="button" data-tab="history">History</button>
+      <button type="button" data-tab="settings">Settings</button>
+    </nav>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
