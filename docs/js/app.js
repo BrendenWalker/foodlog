@@ -1,5 +1,6 @@
 import { dateFromKey, groupEntriesByDay, targetFor, todayKey } from "./dates.js";
 import {
+  FOOD_CATEGORIES,
   addEntry,
   deleteEntry,
   deleteFood,
@@ -17,6 +18,11 @@ import {
   setTarget,
   validateImport,
 } from "./db.js";
+
+const CATEGORIES = FOOD_CATEGORIES.map((id) => ({
+  id,
+  label: id.charAt(0).toUpperCase() + id.slice(1),
+}));
 
 const TITLES = {
   today: "Today",
@@ -172,6 +178,35 @@ function recentRow(food) {
   return li;
 }
 
+function groupFoods(items) {
+  const buckets = new Map(CATEGORIES.map((category) => [category.id, []]));
+  const uncategorized = [];
+  for (const food of items) {
+    const bucket = buckets.get(food.category);
+    if (bucket) bucket.push(food);
+    else uncategorized.push(food);
+  }
+  const groups = [];
+  for (const category of CATEGORIES) {
+    const foodsInGroup = buckets.get(category.id);
+    if (foodsInGroup.length === 0) continue;
+    groups.push({ id: category.id, label: category.label, foods: foodsInGroup });
+  }
+  if (uncategorized.length > 0) groups.push({ id: "uncategorized", label: "Uncategorized", foods: uncategorized });
+  return groups;
+}
+
+function assertCategoryOrder() {
+  const ids = groupFoods([
+    { name: "Z", category: "dinner" },
+    { name: "A", category: "drink" },
+    { name: "M", category: null },
+  ])
+    .map((group) => group.id)
+    .join(",");
+  if (ids !== "drink,dinner,uncategorized") throw new Error("category grouping");
+}
+
 function foodRow(food, onPress, label) {
   const button = el("button", "food-row");
   button.type = "button";
@@ -261,7 +296,11 @@ function summaryRow(label, value, strong, over) {
 
 function renderLibraryList() {
   const matches = filteredFoods($("library-search").value);
-  const nodes = matches.map((food) => foodRow(food, openFoodForm, `Edit ${food.name}`));
+  const nodes = groupFoods(matches).flatMap((group) => {
+    const list = el("ul", "rows");
+    list.append(...group.foods.map((food) => foodRow(food, openFoodForm, `Edit ${food.name}`)));
+    return [el("h2", "", group.label), list];
+  });
   const emptyText = foods.length === 0 ? "No foods yet." : "No matching foods.";
   setList("library-list", "library-empty", nodes, emptyText);
 }
@@ -363,8 +402,10 @@ function openFoodForm(food) {
   editingId = food ? food.id : null;
   $("food-name").value = food ? food.name : "";
   $("food-calories").value = food ? String(food.calories) : "";
+  $("food-category").value = food && CATEGORIES.some((category) => category.id === food.category) ? food.category : "";
   setError("food-name-error", "");
   setError("food-cal-error", "");
+  setError("food-category-error", "");
   $("delete-food").hidden = !food;
   show("food-form", food ? "Edit Food" : "Add Food");
   $("food-name").focus();
@@ -374,12 +415,15 @@ async function onSaveFood(event) {
   event.preventDefault();
   const name = $("food-name").value.trim();
   const calories = parsePositiveInt($("food-calories").value);
+  const category = $("food-category").value;
   const nameOk = name.length > 0;
   const caloriesOk = calories != null;
+  const categoryOk = CATEGORIES.some((item) => item.id === category);
   setError("food-name-error", nameOk ? "" : "Name is required.");
   setError("food-cal-error", caloriesOk ? "" : "Calories must be a positive whole number.");
-  if (!nameOk || !caloriesOk) return;
-  await saveFood({ id: editingId, name, calories });
+  setError("food-category-error", categoryOk ? "" : "Category is required.");
+  if (!nameOk || !caloriesOk || !categoryOk) return;
+  await saveFood({ id: editingId, name, calories, category });
   show("library");
   await renderLibrary();
 }
@@ -484,7 +528,17 @@ function onBack() {
   else if (view === "select") onTab("today");
 }
 
+function fillCategorySelect() {
+  const select = $("food-category");
+  for (const category of CATEGORIES) {
+    const option = el("option", "", category.label);
+    option.value = category.id;
+    select.append(option);
+  }
+}
+
 function bind() {
+  fillCategorySelect();
   $("back-btn").addEventListener("click", onBack);
   $("undo-btn").addEventListener("click", onUndo);
   $("add-from-library").addEventListener("click", openSelect);
@@ -503,6 +557,7 @@ function bind() {
 }
 
 async function init() {
+  assertCategoryOrder();
   bind();
   await ensureDefaultTarget(todayKey());
   show("today");

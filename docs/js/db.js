@@ -3,6 +3,8 @@ import { localDateKey, todayKey } from "./dates.js";
 const DB_NAME = "foodlog";
 const DB_VERSION = 1;
 export const SCHEMA_VERSION = 1;
+export const FOOD_CATEGORIES = ["drink", "snack", "breakfast", "lunch", "dinner"];
+const FOOD_CATEGORY_SET = new Set(FOOD_CATEGORIES);
 
 let dbPromise;
 
@@ -103,7 +105,10 @@ export function getEntriesByDate(dateKey) {
   );
 }
 
-export function saveFood({ id, name, calories }) {
+export function saveFood({ id, name, calories, category }) {
+  if (!FOOD_CATEGORY_SET.has(category)) {
+    return Promise.reject(new Error("Category is required."));
+  }
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
@@ -122,6 +127,7 @@ export function saveFood({ id, name, calories }) {
             id: crypto.randomUUID(),
             name,
             calories,
+            category,
             lastUsedAt: null,
             createdAt: now,
             updatedAt: now,
@@ -138,6 +144,7 @@ export function saveFood({ id, name, calories }) {
             }
             row.name = name;
             row.calories = calories;
+            row.category = category;
             row.updatedAt = now;
             food = row;
             store.put(row);
@@ -300,10 +307,18 @@ function copyFood(raw, index) {
   const createdAt = raw.createdAt == null ? now : raw.createdAt;
   const updatedAt = raw.updatedAt == null ? now : raw.updatedAt;
   if (!isTimestamp(createdAt) || !isTimestamp(updatedAt)) fail(`Food ${index} has an invalid timestamp.`);
+  let category = null;
+  if (raw.category != null) {
+    if (typeof raw.category !== "string" || !FOOD_CATEGORY_SET.has(raw.category)) {
+      fail(`Food ${index} has an invalid category.`);
+    }
+    category = raw.category;
+  }
   return {
     id: raw.id,
     name: raw.name.trim(),
     calories: raw.calories,
+    category,
     lastUsedAt,
     createdAt,
     updatedAt,

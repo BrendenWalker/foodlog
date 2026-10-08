@@ -62,7 +62,7 @@
       <section id="view-library" data-view="library" hidden>
         <input id="library-search" class="search" type="search" placeholder="Search foods" enterkeyhint="search" aria-label="Search foods" />
         <button type="button" id="add-food" class="wide">+ Add Food</button>
-        <ul id="library-list" class="rows"></ul>
+        <div id="library-list"></div>
         <p id="library-empty" class="empty" hidden>No foods yet.</p>
       </section>
 
@@ -73,8 +73,14 @@
           <p id="food-name-error" class="error" hidden></p>
 
           <label for="food-calories">Calories</label>
-          <input id="food-calories" inputmode="numeric" autocomplete="off" enterkeyhint="done" />
+          <input id="food-calories" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
           <p id="food-cal-error" class="error" hidden></p>
+
+          <label for="food-category">Category</label>
+          <select id="food-category">
+            <option value=""></option>
+          </select>
+          <p id="food-category-error" class="error" hidden></p>
 
           <button type="submit" class="wide">Save</button>
         </form>
