@@ -572,6 +572,26 @@ async function onUndo() {
   }
 }
 
+async function onQuickAdd(event) {
+  event.preventDefault();
+  const input = $("quick-calories");
+  const calories = parsePositiveInt(input.value);
+  if (calories == null) {
+    setError("quick-error", "Calories must be a positive whole number.");
+    return;
+  }
+  setError("quick-error", "");
+  try {
+    await addEntry({ name: "Quick add", calories });
+    input.value = "";
+    setError("today-error", "");
+    await renderToday();
+  } catch (error) {
+    console.error(error);
+    setError("quick-error", "Could not save that entry.");
+  }
+}
+
 async function onAdd(food) {
   try {
     await addEntry(food);
@@ -774,6 +794,7 @@ function bind() {
   $("back-btn").addEventListener("click", onBack);
   $("undo-btn").addEventListener("click", onUndo);
   $("add-from-library").addEventListener("click", openSelect);
+  $("quick-add").addEventListener("submit", onQuickAdd);
   $("add-food").addEventListener("click", () => openFoodForm(null));
   $("food-form").addEventListener("submit", onSaveFood);
   $("delete-food").addEventListener("click", onDeleteFood);

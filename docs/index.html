@@ -39,6 +39,15 @@
         </div>
         <p id="today-error" class="error" hidden></p>
 
+        <h2>Quick add</h2>
+        <form id="quick-add" class="quick-add">
+          <div class="inline-field">
+            <input id="quick-calories" inputmode="numeric" autocomplete="off" enterkeyhint="done" placeholder="Calories" aria-label="Calories" />
+            <button type="submit" class="add-btn">Add</button>
+          </div>
+          <p id="quick-error" class="error" hidden></p>
+        </form>
+
         <h2>Recently Used</h2>
         <ul id="recent-list" class="rows"></ul>
         <p id="recent-empty" class="empty" hidden>No recent foods yet.</p>
