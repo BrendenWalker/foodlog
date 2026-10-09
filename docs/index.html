@@ -72,6 +72,10 @@
           <input id="food-name" autocomplete="off" enterkeyhint="next" />
           <p id="food-name-error" class="error" hidden></p>
 
+          <label for="food-serving">Serving size</label>
+          <input id="food-serving" autocomplete="off" enterkeyhint="next" />
+          <p id="food-serving-error" class="error" hidden></p>
+
           <label for="food-calories">Calories</label>
           <input id="food-calories" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
           <p id="food-cal-error" class="error" hidden></p>
@@ -94,15 +98,61 @@
       </section>
 
       <section id="view-settings" data-view="settings" hidden>
+        <ul class="rows">
+          <li><button type="button" class="row" data-open="calories">Calories</button></li>
+          <li><button type="button" class="row" data-open="import">Import/Export</button></li>
+        </ul>
+      </section>
+
+      <section id="view-calories" data-view="calories" hidden>
         <form id="target-form">
-          <label for="target-input">Daily Calorie Target</label>
+          <fieldset>
+            <legend>Sex</legend>
+            <div class="choice-row">
+              <label class="choice"><input type="radio" name="sex" value="male" />Male</label>
+              <label class="choice"><input type="radio" name="sex" value="female" />Female</label>
+            </div>
+          </fieldset>
+          <p id="sex-error" class="error" hidden></p>
+
+          <label for="age-input">Age</label>
+          <input id="age-input" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
+          <p id="age-error" class="error" hidden></p>
+
+          <label for="height-ft">Height</label>
           <div class="inline-field">
-            <input id="target-input" inputmode="numeric" autocomplete="off" enterkeyhint="done" />
-            <span>kcal</span>
+            <input id="height-ft" inputmode="numeric" autocomplete="off" enterkeyhint="next" aria-label="Feet" />
+            <span>ft</span>
+            <input id="height-in" inputmode="numeric" autocomplete="off" enterkeyhint="next" aria-label="Inches" />
+            <span>in</span>
           </div>
+          <p id="height-error" class="error" hidden></p>
+
+          <label for="weight-input">Weight</label>
+          <div class="inline-field">
+            <input id="weight-input" inputmode="decimal" autocomplete="off" enterkeyhint="done" />
+            <span>lb</span>
+          </div>
+          <p id="weight-error" class="error" hidden></p>
+
+          <label for="activity-input">Activity</label>
+          <select id="activity-input"></select>
+          <p id="activity-error" class="error" hidden></p>
+
+          <fieldset>
+            <legend>Pounds per week</legend>
+            <div id="rate-row" class="rate-row"></div>
+          </fieldset>
+          <p id="rate-error" class="error" hidden></p>
+
+          <p id="target-preview"></p>
+          <p id="target-hint" class="hint" hidden>Mifflin–St Jeor times activity level, minus 500 kcal for each pound per week.</p>
           <p id="target-error" class="error" hidden></p>
           <button type="submit" class="wide">Save</button>
         </form>
+      </section>
+
+      <section id="view-import" data-view="import" hidden>
         <button type="button" id="export-btn" class="wide secondary">Export Data</button>
         <button type="button" id="import-btn" class="wide secondary">Import Data</button>
         <input id="import-file" type="file" accept="application/json,.json" hidden />

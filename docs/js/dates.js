@@ -17,14 +17,19 @@ export function dateFromKey(dateKey) {
 }
 
 // Latest target whose effectiveDate is on or before dateKey. ISO dates sort as strings.
-// Returns the calorie number, or null when no target applied yet.
-export function targetFor(dateKey, targets) {
+export function targetRecordFor(dateKey, targets) {
   let best = null;
   for (const target of targets) {
     if (target.effectiveDate <= dateKey && (best === null || target.effectiveDate > best.effectiveDate)) {
       best = target;
     }
   }
+  return best;
+}
+
+// Returns the calorie number, or null when no target applied yet.
+export function targetFor(dateKey, targets) {
+  const best = targetRecordFor(dateKey, targets);
   return best ? best.calories : null;
 }
 
@@ -74,6 +79,7 @@ function selfCheck() {
   assert(targetFor("2026-10-07", targets) === 2000, "day before a change");
   assert(targetFor("2026-10-08", targets) === 1800, "change applies that day");
   assert(targetFor("2026-10-09", targets) === 1800, "change carries forward");
+  assert(targetRecordFor("2026-10-08", targets).calories === 1800, "record for the change day");
 
   const grouped = groupEntriesByDay([
     { id: "a", calories: 100, timestamp: new Date(2026, 9, 8, 23, 30).getTime(), dateKey: "2026-10-08" },

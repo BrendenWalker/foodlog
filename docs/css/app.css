@@ -255,8 +255,85 @@ select {
 }
 
 #food-form input,
-#food-form select {
+#food-form select,
+#target-form input:not([type="radio"]),
+#target-form select {
   width: 100%;
+}
+
+fieldset {
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+legend {
+  margin-bottom: 6px;
+  padding: 0;
+  font-weight: 650;
+}
+
+.choice-row,
+.rate-row {
+  display: grid;
+  gap: 8px;
+}
+
+.choice-row {
+  grid-template-columns: 1fr 1fr;
+}
+
+.rate-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 4px;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-weight: 650;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#target-form input[type="radio"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+#target-preview {
+  margin: 16px 0 0;
+  font-size: 1.35rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+#target-preview.is-current {
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: 600;
 }
 
 .wide {

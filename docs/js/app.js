@@ -1,7 +1,13 @@
-import { dateFromKey, groupEntriesByDay, targetFor, todayKey } from "./dates.js";
+import { dateFromKey, groupEntriesByDay, targetFor, targetRecordFor, todayKey } from "./dates.js";
 import {
+  ACTIVITY_LEVELS,
+  BODY_LIMITS,
   FOOD_CATEGORIES,
+  LOSS_RATES,
+  activityFactor,
   addEntry,
+  calorieFloor,
+  dailyTargetCalories,
   deleteEntry,
   deleteFood,
   ensureDefaultTarget,
@@ -14,8 +20,11 @@ import {
   parsePositiveInt,
   putEntry,
   replaceAll,
+  SERVING_MAX,
   saveFood,
+  servingText,
   setTarget,
+  validProfile,
   validateImport,
 } from "./db.js";
 
@@ -30,6 +39,16 @@ const TITLES = {
   library: "Library",
   settings: "Settings",
   select: "Add from Library",
+  calories: "Calories",
+  import: "Import/Export",
+};
+
+const PARENT = {
+  day: "history",
+  "food-form": "library",
+  select: "today",
+  calories: "settings",
+  import: "settings",
 };
 
 let view = "today";
@@ -38,6 +57,8 @@ let editingId = null;
 let selectedDateKey = null;
 let undoEntry = null;
 let undoTimer = 0;
+let settingsTarget = null;
+let settingsTried = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -109,13 +130,13 @@ function show(name, title) {
   for (const section of document.querySelectorAll("[data-view]")) {
     section.hidden = section.dataset.view !== name;
   }
-  const tab = name === "day" ? "history" : name === "food-form" ? "library" : name === "select" ? "today" : name;
+  const tab = PARENT[name] || name;
   for (const button of document.querySelectorAll("[data-tab]")) {
     if (button.dataset.tab === tab) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   }
   $("screen-title").textContent = title || TITLES[name] || "Calories";
-  $("back-btn").hidden = !(name === "day" || name === "food-form" || name === "select");
+  $("back-btn").hidden = !(name in PARENT);
 }
 
 function paintStatus(consumed, target) {
@@ -151,12 +172,18 @@ function paintStatus(consumed, target) {
   bar.setAttribute("aria-valuetext", sub.textContent);
 }
 
+function kcalLabel(item) {
+  const kcal = `${formatNum(item.calories)} kcal`;
+  const serving = servingText(item);
+  return serving ? `(${serving}) ${kcal}` : kcal;
+}
+
 function entryRow(entry) {
   const li = el("li", "row entry");
   li.append(
     el("span", "entry-time", formatTime(entry.timestamp)),
     el("span", "entry-name", entry.name),
-    el("span", "entry-cal", `${formatNum(entry.calories)} kcal`),
+    el("span", "entry-cal", kcalLabel(entry)),
   );
   const remove = el("button", "remove-btn", "Remove");
   remove.type = "button";
@@ -169,7 +196,7 @@ function entryRow(entry) {
 function recentRow(food) {
   const li = el("li", "row");
   const main = el("div", "row-main");
-  main.append(el("div", "row-name", food.name), el("div", "row-meta", `${formatNum(food.calories)} kcal`));
+  main.append(el("div", "row-name", food.name), el("div", "row-meta", kcalLabel(food)));
   const add = el("button", "add-btn", "Add");
   add.type = "button";
   add.setAttribute("aria-label", `Add ${food.name}`);
@@ -196,6 +223,12 @@ function groupFoods(items) {
   return groups;
 }
 
+function assertServingLabel() {
+  if (kcalLabel({ calories: 100 }) !== "100 kcal") throw new Error("serving label");
+  if (kcalLabel({ calories: 100, serving: "1 cup" }) !== "(1 cup) 100 kcal") throw new Error("serving label");
+  if (kcalLabel({ calories: 100, grams: 30 }) !== "(30 g) 100 kcal") throw new Error("serving label");
+}
+
 function assertCategoryOrder() {
   const ids = groupFoods([
     { name: "Z", category: "dinner" },
@@ -210,7 +243,7 @@ function assertCategoryOrder() {
 function foodRow(food, onPress, label) {
   const button = el("button", "food-row");
   button.type = "button";
-  button.append(el("span", "food-name", food.name), el("span", "food-cal", `${formatNum(food.calories)} kcal`));
+  button.append(el("span", "food-name", food.name), el("span", "food-cal", kcalLabel(food)));
   button.setAttribute("aria-label", label);
   button.addEventListener("click", () => onPress(food));
   const li = el("li");
@@ -317,11 +350,156 @@ async function renderLibrary() {
   renderLibraryList();
 }
 
+function rateLabel(rate) {
+  return rate === 0.5 ? ".5" : String(rate);
+}
+
+function fillActivitySelect() {
+  const select = $("activity-input");
+  for (const level of ACTIVITY_LEVELS) {
+    const option = el("option", "", level.label);
+    option.value = level.id;
+    select.append(option);
+  }
+}
+
+function fillRateRadios() {
+  const row = $("rate-row");
+  for (const rate of LOSS_RATES) {
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "lb-per-week";
+    input.value = String(rate);
+    const label = el("label", "choice");
+    label.append(input, rateLabel(rate));
+    row.append(label);
+  }
+}
+
+function checkedValue(name) {
+  const node = $("target-form").querySelector(`input[name="${name}"]:checked`);
+  return node ? node.value : "";
+}
+
+function parseInches(raw) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/.test(text)) return null;
+  const value = Number(text);
+  if (text !== String(value) || value > 11) return null;
+  return value;
+}
+
+function parseWeightLb(raw) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+(\.\d+)?$/.test(text) || /^0\d/.test(text)) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < BODY_LIMITS.weightMin || value > BODY_LIMITS.weightMax) return null;
+  return value;
+}
+
+function readProfile() {
+  const sex = checkedValue("sex");
+  const age = parsePositiveInt($("age-input").value);
+  const feet = parsePositiveInt($("height-ft").value);
+  const inches = parseInches($("height-in").value);
+  const weightLb = parseWeightLb($("weight-input").value);
+  const rateRaw = checkedValue("lb-per-week");
+  const lbPerWeek = rateRaw && LOSS_RATES.includes(Number(rateRaw)) ? Number(rateRaw) : null;
+  const activity = $("activity-input").value;
+  const heightIn = feet != null && inches != null ? feet * 12 + inches : null;
+  const sexOk = sex === "male" || sex === "female";
+  const ageOk = age != null && age >= BODY_LIMITS.ageMin && age <= BODY_LIMITS.ageMax;
+  const heightOk =
+    heightIn != null && heightIn >= BODY_LIMITS.heightMin && heightIn <= BODY_LIMITS.heightMax && inches <= 11;
+  const activityOk = activityFactor(activity) != null;
+  const value = { sex, age, heightIn, weightLb, lbPerWeek, activity };
+  return {
+    ok: sexOk && ageOk && heightOk && weightLb != null && lbPerWeek != null && activityOk && validProfile(value),
+    value,
+    errors: {
+      sex: sexOk ? "" : "Select male or female.",
+      age: ageOk ? "" : `Age must be ${BODY_LIMITS.ageMin} to ${BODY_LIMITS.ageMax}.`,
+      height: heightOk ? "" : "Height must be 4 ft 0 in to 8 ft 0 in.",
+      weight: weightLb != null ? "" : `Weight must be ${BODY_LIMITS.weightMin} to ${BODY_LIMITS.weightMax} lb.`,
+      activity: activityOk ? "" : "Select an activity level.",
+      rate: lbPerWeek != null ? "" : "Select pounds per week.",
+    },
+  };
+}
+
+function showProfileErrors(errors) {
+  setError("sex-error", errors.sex);
+  setError("age-error", errors.age);
+  setError("height-error", errors.height);
+  setError("weight-error", errors.weight);
+  setError("activity-error", errors.activity);
+  setError("rate-error", errors.rate);
+}
+
+function clearProfileErrors() {
+  showProfileErrors({ sex: "", age: "", height: "", weight: "", activity: "", rate: "" });
+  setError("target-error", "");
+}
+
+function fillProfile(record) {
+  const sex = record && (record.sex === "male" || record.sex === "female") ? record.sex : "";
+  for (const input of $("target-form").querySelectorAll('input[name="sex"]')) {
+    input.checked = input.value === sex;
+  }
+  $("age-input").value = record && Number.isInteger(record.age) ? String(record.age) : "";
+  if (record && Number.isInteger(record.heightIn)) {
+    $("height-ft").value = String(Math.floor(record.heightIn / 12));
+    $("height-in").value = String(record.heightIn % 12);
+  } else {
+    $("height-ft").value = "";
+    $("height-in").value = "";
+  }
+  $("weight-input").value = record && typeof record.weightLb === "number" ? String(record.weightLb) : "";
+  const activity = record && activityFactor(record.activity) != null ? record.activity : "sedentary";
+  $("activity-input").value = activity;
+  for (const input of $("target-form").querySelectorAll('input[name="lb-per-week"]')) {
+    input.checked = record != null && Number(input.value) === record.lbPerWeek;
+  }
+}
+
+function paintPreview() {
+  const profile = readProfile();
+  const preview = $("target-preview");
+  const hint = $("target-hint");
+  if (!profile.ok) {
+    const current = settingsTarget && settingsTarget.calories;
+    preview.textContent = current ? `Current target: ${formatNum(current)} kcal` : "";
+    preview.classList.toggle("is-current", Boolean(current));
+    hint.hidden = true;
+    setError("target-error", "");
+    return;
+  }
+  const calories = dailyTargetCalories(profile.value);
+  const floor = calorieFloor(profile.value.sex);
+  preview.textContent = `Eat ${formatNum(calories)} kcal / day`;
+  preview.classList.remove("is-current");
+  hint.hidden = false;
+  setError(
+    "target-error",
+    calories < floor ? `${formatNum(calories)} kcal is under the ${formatNum(floor)} kcal minimum.` : "",
+  );
+}
+
+function onProfileInput() {
+  setSettingsMsg("");
+  if (settingsTried) showProfileErrors(readProfile().errors);
+  paintPreview();
+}
+
 async function renderSettings() {
   const targets = await getTargets();
-  const current = targetFor(todayKey(), targets);
-  const input = $("target-input");
-  if (document.activeElement !== input) input.value = current ?? "";
+  settingsTarget = targetRecordFor(todayKey(), targets);
+  if (!$("target-form").contains(document.activeElement)) {
+    settingsTried = false;
+    fillProfile(settingsTarget);
+    clearProfileErrors();
+  }
+  paintPreview();
 }
 
 async function refresh() {
@@ -332,7 +510,7 @@ async function refresh() {
   else if (view === "select") {
     await loadFoods();
     renderSelectList();
-  } else if (view === "settings") await renderSettings();
+  } else if (view === "calories") await renderSettings();
 }
 
 function clearUndo() {
@@ -401,9 +579,11 @@ async function openDay(dateKey) {
 function openFoodForm(food) {
   editingId = food ? food.id : null;
   $("food-name").value = food ? food.name : "";
+  $("food-serving").value = food ? servingText(food) : "";
   $("food-calories").value = food ? String(food.calories) : "";
   $("food-category").value = food && CATEGORIES.some((category) => category.id === food.category) ? food.category : "";
   setError("food-name-error", "");
+  setError("food-serving-error", "");
   setError("food-cal-error", "");
   setError("food-category-error", "");
   $("delete-food").hidden = !food;
@@ -414,16 +594,19 @@ function openFoodForm(food) {
 async function onSaveFood(event) {
   event.preventDefault();
   const name = $("food-name").value.trim();
+  const serving = $("food-serving").value.trim();
   const calories = parsePositiveInt($("food-calories").value);
   const category = $("food-category").value;
   const nameOk = name.length > 0;
+  const servingOk = serving.length <= SERVING_MAX;
   const caloriesOk = calories != null;
   const categoryOk = CATEGORIES.some((item) => item.id === category);
   setError("food-name-error", nameOk ? "" : "Name is required.");
+  setError("food-serving-error", servingOk ? "" : `Serving size must be ${SERVING_MAX} characters or less.`);
   setError("food-cal-error", caloriesOk ? "" : "Calories must be a positive whole number.");
   setError("food-category-error", categoryOk ? "" : "Category is required.");
-  if (!nameOk || !caloriesOk || !categoryOk) return;
-  await saveFood({ id: editingId, name, calories, category });
+  if (!nameOk || !servingOk || !caloriesOk || !categoryOk) return;
+  await saveFood({ id: editingId, name, calories, category, serving });
   show("library");
   await renderLibrary();
 }
@@ -439,14 +622,18 @@ async function onDeleteFood() {
 
 async function onSaveTarget(event) {
   event.preventDefault();
-  const calories = parsePositiveInt($("target-input").value);
-  if (calories == null) {
-    setError("target-error", "Enter a positive whole number.");
-    return;
-  }
-  setError("target-error", "");
-  await setTarget(todayKey(), calories);
-  $("settings-msg").textContent = "Saved.";
+  settingsTried = true;
+  const profile = readProfile();
+  showProfileErrors(profile.errors);
+  paintPreview();
+  if (!profile.ok) return;
+  const calories = dailyTargetCalories(profile.value);
+  const floor = calorieFloor(profile.value.sex);
+  if (calories < floor) return;
+  await setTarget(todayKey(), calories, profile.value);
+  settingsTarget = { effectiveDate: todayKey(), calories, ...profile.value };
+  settingsTried = false;
+  setSettingsMsg("Saved.");
 }
 
 function setSettingsMsg(message) {
@@ -506,9 +693,11 @@ async function onImportFile(event) {
   try {
     await replaceAll(clean);
     const targets = await ensureDefaultTarget(todayKey());
-    const current = targetFor(todayKey(), targets);
-    $("target-input").value = current ?? "";
-    setError("target-error", "");
+    settingsTarget = targetRecordFor(todayKey(), targets);
+    settingsTried = false;
+    fillProfile(settingsTarget);
+    clearProfileErrors();
+    paintPreview();
     setSettingsMsg("Backup restored.");
   } catch (error) {
     console.error(error);
@@ -523,9 +712,8 @@ async function onTab(name) {
 }
 
 function onBack() {
-  if (view === "day") onTab("history");
-  else if (view === "food-form") onTab("library");
-  else if (view === "select") onTab("today");
+  const parent = PARENT[view];
+  if (parent) onTab(parent);
 }
 
 function fillCategorySelect() {
@@ -537,8 +725,26 @@ function fillCategorySelect() {
   }
 }
 
+function assertCalorieFormula() {
+  const calories = dailyTargetCalories({ sex: "male", age: 40, heightIn: 72, weightLb: 200, lbPerWeek: 1 });
+  if (calories !== 1726) throw new Error("calorie formula");
+  const active = dailyTargetCalories({
+    sex: "male",
+    age: 40,
+    heightIn: 72,
+    weightLb: 200,
+    lbPerWeek: 1,
+    activity: "moderate",
+  });
+  if (active !== 2376) throw new Error("calorie activity");
+  const low = dailyTargetCalories({ sex: "female", age: 40, heightIn: 60, weightLb: 100, lbPerWeek: 2.5 });
+  if (low !== 4) throw new Error("calorie floor fixture");
+}
+
 function bind() {
   fillCategorySelect();
+  fillActivitySelect();
+  fillRateRadios();
   $("back-btn").addEventListener("click", onBack);
   $("undo-btn").addEventListener("click", onUndo);
   $("add-from-library").addEventListener("click", openSelect);
@@ -546,6 +752,8 @@ function bind() {
   $("food-form").addEventListener("submit", onSaveFood);
   $("delete-food").addEventListener("click", onDeleteFood);
   $("target-form").addEventListener("submit", onSaveTarget);
+  $("target-form").addEventListener("input", onProfileInput);
+  $("target-form").addEventListener("change", onProfileInput);
   $("export-btn").addEventListener("click", onExport);
   $("import-btn").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", onImportFile);
@@ -554,10 +762,15 @@ function bind() {
   for (const button of document.querySelectorAll("[data-tab]")) {
     button.addEventListener("click", () => onTab(button.dataset.tab));
   }
+  for (const button of document.querySelectorAll("[data-open]")) {
+    button.addEventListener("click", () => onTab(button.dataset.open));
+  }
 }
 
 async function init() {
   assertCategoryOrder();
+  assertServingLabel();
+  assertCalorieFormula();
   bind();
   await ensureDefaultTarget(todayKey());
   show("today");

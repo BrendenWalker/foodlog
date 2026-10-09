@@ -105,10 +105,44 @@ export function getEntriesByDate(dateKey) {
   );
 }
 
-export function saveFood({ id, name, calories, category }) {
+export const SERVING_MAX = 80;
+
+// Free-form serving text. Older rows stored a gram count; show that as "40 g" until resaved.
+export function servingText(item) {
+  if (!item) return "";
+  if (typeof item.serving === "string" && item.serving.trim()) return item.serving.trim();
+  if (typeof item.grams === "number" && Number.isInteger(item.grams) && item.grams > 0) return `${item.grams} g`;
+  return "";
+}
+
+function copyServing(raw, index, label) {
+  if (raw.serving != null) {
+    if (typeof raw.serving !== "string") fail(`${label} ${index} has an invalid serving size.`);
+    const text = raw.serving.trim();
+    if (text.length > SERVING_MAX) fail(`${label} ${index} has an invalid serving size.`);
+    return text;
+  }
+  if (raw.grams != null) {
+    if (!isPositiveInt(raw.grams)) fail(`${label} ${index} has an invalid serving size.`);
+    return `${raw.grams} g`;
+  }
+  return "";
+}
+
+function applyServing(record, serving) {
+  delete record.grams;
+  if (!serving) delete record.serving;
+  else record.serving = serving;
+}
+
+export function saveFood({ id, name, calories, category, serving = "" }) {
   if (!FOOD_CATEGORY_SET.has(category)) {
     return Promise.reject(new Error("Category is required."));
   }
+  if (typeof serving !== "string" || serving.trim().length > SERVING_MAX) {
+    return Promise.reject(new Error("Serving size must be 80 characters or less."));
+  }
+  serving = serving.trim();
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
@@ -132,6 +166,7 @@ export function saveFood({ id, name, calories, category }) {
             createdAt: now,
             updatedAt: now,
           };
+          applyServing(food, serving);
           store.put(food);
         } else {
           const getRequest = store.get(id);
@@ -145,6 +180,7 @@ export function saveFood({ id, name, calories, category }) {
             row.name = name;
             row.calories = calories;
             row.category = category;
+            applyServing(row, serving);
             row.updatedAt = now;
             food = row;
             store.put(row);
@@ -178,6 +214,8 @@ export function addEntry(food, timestamp = Date.now()) {
     timestamp,
     dateKey: localDateKey(new Date(timestamp)),
   };
+  const serving = servingText(food);
+  if (serving) entry.serving = serving;
   return openDb().then((db) => {
     const tx = db.transaction(["entries", "foods"], "readwrite");
     tx.objectStore("entries").put(entry);
@@ -212,11 +250,65 @@ export function putEntry(entry) {
   });
 }
 
-export function setTarget(effectiveDate, calories) {
+export const LOSS_RATES = [0.5, 1, 1.5, 2, 2.5];
+export const BODY_LIMITS = { ageMin: 15, ageMax: 100, heightMin: 48, heightMax: 96, weightMin: 70, weightMax: 700 };
+
+// Factors applied to Mifflin–St Jeor. Stored by id so the floats are not compared.
+export const ACTIVITY_LEVELS = [
+  { id: "sedentary", label: "Sedentary, little or no exercise", factor: 1.2 },
+  { id: "light", label: "Lightly active, 1 to 3 days a week", factor: 1.375 },
+  { id: "moderate", label: "Moderately active, 3 to 5 days a week", factor: 1.55 },
+  { id: "active", label: "Very active, 6 to 7 days a week", factor: 1.725 },
+  { id: "extra", label: "Extra active, hard daily exercise", factor: 1.9 },
+];
+
+export function activityFactor(id) {
+  const level = ACTIVITY_LEVELS.find((item) => item.id === id);
+  return level ? level.factor : null;
+}
+
+// Mifflin–St Jeor, kcal/day. Weight is pounds, height is inches.
+// Missing activity is sedentary, which is what older targets used.
+export function dailyTargetCalories({ sex, age, heightIn, weightLb, lbPerWeek, activity = "sedentary" }) {
+  const factor = activityFactor(activity);
+  if (factor == null) throw new Error("calorie activity");
+  const kg = weightLb * 0.45359237;
+  const cm = heightIn * 2.54;
+  const bmr = 10 * kg + 6.25 * cm - 5 * age + (sex === "male" ? 5 : -161);
+  return Math.round(bmr * factor - lbPerWeek * 500);
+}
+
+export function calorieFloor(sex) {
+  return sex === "male" ? 1500 : 1200;
+}
+
+export function validProfile(profile) {
+  if (!profile || (profile.sex !== "male" && profile.sex !== "female")) return false;
+  if (!isPositiveInt(profile.age) || profile.age < BODY_LIMITS.ageMin || profile.age > BODY_LIMITS.ageMax) return false;
+  if (!isPositiveInt(profile.heightIn) || profile.heightIn < BODY_LIMITS.heightMin || profile.heightIn > BODY_LIMITS.heightMax) {
+    return false;
+  }
+  if (typeof profile.weightLb !== "number" || !Number.isFinite(profile.weightLb)) return false;
+  if (profile.weightLb < BODY_LIMITS.weightMin || profile.weightLb > BODY_LIMITS.weightMax) return false;
+  if (activityFactor(profile.activity) == null) return false;
+  return LOSS_RATES.includes(profile.lbPerWeek);
+}
+
+export function setTarget(effectiveDate, calories, profile) {
+  const record = { effectiveDate, calories };
+  if (profile) {
+    if (!validProfile(profile)) return Promise.reject(new Error("Invalid body profile."));
+    record.sex = profile.sex;
+    record.age = profile.age;
+    record.heightIn = profile.heightIn;
+    record.weightLb = profile.weightLb;
+    record.lbPerWeek = profile.lbPerWeek;
+    record.activity = profile.activity;
+  }
   return openDb().then((db) => {
     const tx = db.transaction("targets", "readwrite");
-    tx.objectStore("targets").put({ effectiveDate, calories });
-    return finish(tx);
+    tx.objectStore("targets").put(record);
+    return finish(tx, record);
   });
 }
 
@@ -314,7 +406,7 @@ function copyFood(raw, index) {
     }
     category = raw.category;
   }
-  return {
+  const food = {
     id: raw.id,
     name: raw.name.trim(),
     calories: raw.calories,
@@ -323,6 +415,9 @@ function copyFood(raw, index) {
     createdAt,
     updatedAt,
   };
+  const serving = copyServing(raw, index, "Food");
+  if (serving) food.serving = serving;
+  return food;
 }
 
 function copyEntry(raw, index) {
@@ -334,7 +429,7 @@ function copyEntry(raw, index) {
   if (raw.foodId != null && typeof raw.foodId !== "string") fail(`Entry ${index} has an invalid food id.`);
   const dateKey = raw.dateKey == null ? localDateKey(new Date(raw.timestamp)) : raw.dateKey;
   if (!isDateKey(dateKey)) fail(`Entry ${index} has an invalid date.`);
-  return {
+  const entry = {
     id: raw.id,
     foodId: raw.foodId ?? null,
     name: raw.name.trim(),
@@ -342,13 +437,28 @@ function copyEntry(raw, index) {
     timestamp: raw.timestamp,
     dateKey,
   };
+  const serving = copyServing(raw, index, "Entry");
+  if (serving) entry.serving = serving;
+  return entry;
 }
 
 function copyTarget(raw, index) {
   if (!raw || typeof raw !== "object") fail(`Calorie target ${index} is not an object.`);
   if (!isDateKey(raw.effectiveDate)) fail(`Calorie target ${index} has an invalid date.`);
   if (!isPositiveInt(raw.calories)) fail(`Calorie target ${index} has an invalid calorie value.`);
-  return { effectiveDate: raw.effectiveDate, calories: raw.calories };
+  const target = { effectiveDate: raw.effectiveDate, calories: raw.calories };
+  const keys = ["sex", "age", "heightIn", "weightLb", "lbPerWeek", "activity"];
+  if (!keys.some((key) => raw[key] != null)) return target;
+  const profile = {
+    sex: raw.sex,
+    age: raw.age,
+    heightIn: raw.heightIn,
+    weightLb: raw.weightLb,
+    lbPerWeek: raw.lbPerWeek,
+    activity: raw.activity == null ? "sedentary" : raw.activity,
+  };
+  if (!validProfile(profile)) fail(`Calorie target ${index} has an invalid body profile.`);
+  return { ...target, ...profile };
 }
 
 export function validateImport(data) {
