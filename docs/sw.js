@@ -1,5 +1,5 @@
 // Bump this name when the shell files change.
-const CACHE = "foodlog-shell-v11";
+const CACHE = "foodlog-shell-v12";
 
 // Shell only. IndexedDB is not cached here.
 // iOS may drop this worker after a long stretch of not opening the app; the next online open reinstalls it.

@@ -242,6 +242,12 @@ label {
   font-weight: 650;
 }
 
+#select-category {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+}
+
 .search,
 input,
 select {

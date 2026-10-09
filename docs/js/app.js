@@ -240,6 +240,21 @@ function assertCategoryOrder() {
   if (ids !== "drink,dinner,uncategorized") throw new Error("category grouping");
 }
 
+function assertSelectFilter() {
+  const saved = foods;
+  foods = [
+    { name: "Tea", category: "drink" },
+    { name: "Toast", category: "breakfast" },
+  ];
+  const drinks = filteredFoods("", "drink").map((food) => food.name).join(",");
+  const searched = filteredFoods("t", "").map((food) => food.name).join(",");
+  const both = filteredFoods("to", "drink").map((food) => food.name).join(",");
+  foods = saved;
+  if (drinks !== "Tea") throw new Error("category filter");
+  if (searched !== "Tea,Toast") throw new Error("search filter");
+  if (both !== "") throw new Error("category and search");
+}
+
 function foodRow(food, onPress, label) {
   const button = el("button", "food-row");
   button.type = "button";
@@ -251,10 +266,13 @@ function foodRow(food, onPress, label) {
   return li;
 }
 
-function filteredFoods(query) {
+function filteredFoods(query, category = "") {
   const needle = query.trim().toLowerCase();
-  if (!needle) return foods;
-  return foods.filter((food) => food.name.toLowerCase().includes(needle));
+  if (!needle && !category) return foods;
+  return foods.filter((food) => {
+    if (category && food.category !== category) return false;
+    return !needle || food.name.toLowerCase().includes(needle);
+  });
 }
 
 async function loadFoods() {
@@ -339,10 +357,15 @@ function renderLibraryList() {
 }
 
 function renderSelectList() {
-  const matches = filteredFoods($("select-search").value);
+  const matches = filteredFoods($("select-search").value, $("select-category").value);
   const nodes = matches.map((food) => foodRow(food, onAdd, `Add ${food.name}`));
   const emptyText = foods.length === 0 ? "No foods yet. Add them in Library." : "No matching foods.";
   setList("select-list", "select-empty", nodes, emptyText);
+}
+
+function onSelectSearch() {
+  if ($("select-search").value !== "") $("select-category").value = "";
+  renderSelectList();
 }
 
 async function renderLibrary() {
@@ -566,6 +589,7 @@ async function onAdd(food) {
 async function openSelect() {
   await loadFoods();
   $("select-search").value = "";
+  $("select-category").value = "";
   show("select");
   renderSelectList();
 }
@@ -718,10 +742,12 @@ function onBack() {
 
 function fillCategorySelect() {
   const select = $("food-category");
+  const filter = $("select-category");
   for (const category of CATEGORIES) {
     const option = el("option", "", category.label);
     option.value = category.id;
     select.append(option);
+    filter.append(option.cloneNode(true));
   }
 }
 
@@ -758,7 +784,8 @@ function bind() {
   $("import-btn").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", onImportFile);
   $("library-search").addEventListener("input", renderLibraryList);
-  $("select-search").addEventListener("input", renderSelectList);
+  $("select-search").addEventListener("input", onSelectSearch);
+  $("select-category").addEventListener("change", renderSelectList);
   for (const button of document.querySelectorAll("[data-tab]")) {
     button.addEventListener("click", () => onTab(button.dataset.tab));
   }
@@ -769,6 +796,7 @@ function bind() {
 
 async function init() {
   assertCategoryOrder();
+  assertSelectFilter();
   assertServingLabel();
   assertCalorieFormula();
   bind();
