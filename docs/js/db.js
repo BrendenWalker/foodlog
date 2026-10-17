@@ -570,6 +570,16 @@ export function paceKcal(target, percent) {
   return Math.round((target * percent) / 100);
 }
 
+// Calories still allowed before the next distribution boundary.
+// Null after dinner starts, and null once consumption has passed the cap.
+export function windowLeft(consumed, target, distribution, minutes) {
+  const percent = paceCap(distribution, minutes);
+  if (percent >= 100) return null;
+  const cap = paceKcal(target, percent);
+  if (consumed > cap) return null;
+  return cap - consumed;
+}
+
 function requireUnique(items, keyFn, label) {
   const seen = new Set();
   for (const item of items) {
@@ -858,6 +868,17 @@ function selfCheckPace() {
   assertImport(paceCap(distribution, 17 * 60) === 100, "pace at dinner");
   assertImport(paceKcal(2000, 45) === 900, "pace kcal");
   assertImport(paceKcal(2000, 50) === 1000, "pace half");
+  assertImport(windowLeft(200, 2000, distribution, 10 * 60) === 700, "window left at breakfast");
+  assertImport(windowLeft(0, 2000, distribution, 11 * 60 + 59) === 900, "full breakfast window");
+  assertImport(windowLeft(900, 2000, distribution, 10 * 60) === 0, "exact breakfast cap");
+  assertImport(windowLeft(901, 2000, distribution, 10 * 60) === null, "past breakfast cap");
+  assertImport(windowLeft(400, 2000, distribution, 12 * 60) === 1200, "window left at lunch");
+  assertImport(windowLeft(400, 2000, distribution, 17 * 60) === null, "dinner has no separate window left");
+  assertImport(windowLeft(0, 333, distribution, 10 * 60) === 150, "rounded breakfast window");
+  assertImport(
+    windowLeft(0, 2000, { ...distribution, breakfast: 0, lunch: 80, dinner: 20 }, 10 * 60) === 0,
+    "zero breakfast share",
+  );
   const imported = validateImport({
     schemaVersion: 2,
     foods: [],

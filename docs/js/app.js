@@ -22,6 +22,7 @@ import {
   getTargets,
   paceCap,
   paceKcal,
+  windowLeft,
   parsePounds,
   parsePositiveInt,
   putEntry,
@@ -229,6 +230,8 @@ function paintStatus(consumed, target, distribution, minutes) {
   const cap = paceKcal(target, percent);
   const over = consumed > target;
   const paceOver = !over && percent < 100 && consumed > cap;
+  const meal = minutes < distribution.lunchStart ? "breakfast" : "lunch";
+  const left = windowLeft(consumed, target, distribution, minutes);
   sub.classList.toggle("over", over || paceOver);
   bar.classList.toggle("over", over);
   bar.classList.toggle("pace", paceOver);
@@ -236,8 +239,10 @@ function paintStatus(consumed, target, distribution, minutes) {
     sub.textContent = `${formatNum(consumed - target)} kcal over`;
     fill.style.width = "100%";
   } else if (paceOver) {
-    const meal = minutes < distribution.lunchStart ? "breakfast" : "lunch";
     sub.textContent = `${formatNum(consumed - cap)} kcal over ${meal}`;
+    fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
+  } else if (left != null) {
+    sub.textContent = `${formatNum(left)} kcal left for ${meal}`;
     fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
   } else {
     sub.textContent = `${formatNum(target - consumed)} kcal remaining`;
