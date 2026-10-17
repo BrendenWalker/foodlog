@@ -140,6 +140,11 @@ h2 {
   color: var(--over);
 }
 
+.bar-wrap {
+  position: relative;
+  margin: 4px 0;
+}
+
 .bar {
   height: 14px;
   border-radius: 999px;
@@ -154,9 +159,39 @@ h2 {
   background: var(--accent);
 }
 
+.bar.over .bar-fill,
+.bar.pace .bar-fill {
+  background: var(--over);
+}
+
 .bar.over .bar-fill {
   width: 100%;
-  background: var(--over);
+}
+
+.bar-mark {
+  position: absolute;
+  z-index: 1;
+  top: -3px;
+  left: 0;
+  width: 2px;
+  height: 20px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
+  pointer-events: none;
+}
+
+.dist-sum-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 8px;
+}
+
+.dist-sum-row .hint,
+.dist-sum-row .error {
+  margin: 0;
 }
 
 .rows {
@@ -276,7 +311,8 @@ select {
 #serve-form input,
 #weight-form input,
 #target-form input:not([type="radio"]),
-#target-form select {
+#target-form select,
+#distribution-form input {
   width: 100%;
 }
 

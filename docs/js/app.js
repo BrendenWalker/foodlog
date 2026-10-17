@@ -13,17 +13,21 @@ import {
   deleteWeight,
   ensureDefaultTarget,
   exportAll,
+  loadDistribution,
   getAllEntries,
   getAllFoods,
   getAllWeights,
   getEntriesByDate,
   getRecentFoods,
   getTargets,
+  paceCap,
+  paceKcal,
   parsePounds,
   parsePositiveInt,
   putEntry,
   replaceAll,
   SERVING_MAX,
+  saveDistribution,
   saveFood,
   saveWeight,
   scaleServing,
@@ -47,6 +51,7 @@ const TITLES = {
   settings: "Settings",
   select: "Add from Library",
   calories: "Calories",
+  distribution: "Distribution",
   import: "Import/Export",
 };
 
@@ -56,6 +61,7 @@ const PARENT = {
   select: "today",
   serve: "select",
   calories: "settings",
+  distribution: "settings",
   import: "settings",
 };
 
@@ -149,16 +155,68 @@ function show(name, title) {
   $("back-btn").hidden = !(name in PARENT);
 }
 
-function paintStatus(consumed, target) {
+function currentMinutes(now = new Date()) {
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+function minutesToTime(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+}
+
+function timeToMinutes(value) {
+  const match = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(String(value ?? ""));
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const mins = Number(match[2]);
+  if (hours > 23 || mins > 59) return null;
+  return hours * 60 + mins;
+}
+
+function parsePercent(raw) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d{1,3}$/.test(text)) return null;
+  const value = Number(text);
+  if (!Number.isInteger(value) || value > 100) return null;
+  if (text !== String(value)) return null;
+  return value;
+}
+
+function placeMark(node, percent) {
+  if (percent <= 0 || percent >= 100) {
+    node.hidden = true;
+    return;
+  }
+  node.hidden = false;
+  node.style.left = `${percent}%`;
+}
+
+function paintMarks(distribution, show) {
+  const breakfast = $("status-mark-breakfast");
+  const lunch = $("status-mark-lunch");
+  if (!show) {
+    breakfast.hidden = true;
+    lunch.hidden = true;
+    return;
+  }
+  const breakfastAt = distribution.breakfast;
+  const lunchAt = distribution.breakfast + distribution.lunch;
+  placeMark(breakfast, breakfastAt);
+  placeMark(lunch, lunchAt === breakfastAt ? 0 : lunchAt);
+}
+
+function paintStatus(consumed, target, distribution, minutes) {
   const main = $("status-main");
   const sub = $("status-sub");
   const bar = $("status-bar");
   const fill = $("status-fill");
+  paintMarks(distribution, target != null);
   if (target == null) {
     main.textContent = `${formatNum(consumed)} kcal`;
     sub.textContent = "Set a daily target";
     sub.classList.remove("over");
-    bar.classList.remove("over");
+    bar.classList.remove("over", "pace");
     fill.style.width = "0%";
     bar.setAttribute("aria-valuemax", "0");
     bar.setAttribute("aria-valuenow", String(consumed));
@@ -166,16 +224,23 @@ function paintStatus(consumed, target) {
     return;
   }
   main.textContent = `${formatNum(consumed)} / ${formatNum(target)} kcal`;
+  const percent = paceCap(distribution, minutes);
+  const cap = paceKcal(target, percent);
   const over = consumed > target;
-  sub.classList.toggle("over", over);
+  const paceOver = !over && percent < 100 && consumed > cap;
+  sub.classList.toggle("over", over || paceOver);
   bar.classList.toggle("over", over);
+  bar.classList.toggle("pace", paceOver);
   if (over) {
     sub.textContent = `${formatNum(consumed - target)} kcal over`;
     fill.style.width = "100%";
+  } else if (paceOver) {
+    const meal = minutes < distribution.lunchStart ? "breakfast" : "lunch";
+    sub.textContent = `${formatNum(consumed - cap)} kcal over ${meal}`;
+    fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
   } else {
     sub.textContent = `${formatNum(target - consumed)} kcal remaining`;
-    const pct = Math.min(100, (consumed / target) * 100);
-    fill.style.width = `${pct}%`;
+    fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
   }
   bar.setAttribute("aria-valuemax", String(target));
   bar.setAttribute("aria-valuenow", String(consumed));
@@ -298,7 +363,7 @@ async function renderToday() {
     getTargets(),
   ]);
   const consumed = entries.reduce((sum, entry) => sum + entry.calories, 0);
-  paintStatus(consumed, targetFor(dateKey, targets));
+  paintStatus(consumed, targetFor(dateKey, targets), loadDistribution(), currentMinutes());
   setList("recent-list", "recent-empty", recent.map(recentRow), "No recent foods yet.");
   setList("today-entries", "today-empty", entries.map(entryRow), "Nothing logged today.");
   setError("today-error", "");
@@ -545,6 +610,7 @@ async function refresh() {
     await loadFoods();
     renderSelectList();
   } else if (view === "calories") await renderSettings();
+  else if (view === "distribution") renderDistribution();
 }
 
 function formatPounds(value) {
@@ -905,6 +971,70 @@ async function onDeleteFood() {
   await renderLibrary();
 }
 
+function paintDistributionSum() {
+  const parts = ["dist-breakfast", "dist-lunch", "dist-dinner"].map((id) => parsePercent($(id).value));
+  const known = parts.every((value) => value != null);
+  const sum = parts.reduce((total, value) => total + (value ?? 0), 0);
+  $("dist-sum").textContent = known ? `Sum ${sum}%` : "Sum —";
+  return known ? sum : null;
+}
+
+function clearDistributionErrors() {
+  setError("dist-breakfast-error", "");
+  setError("dist-lunch-error", "");
+  setError("dist-dinner-error", "");
+  setError("dist-sum-error", "");
+  setError("dist-time-error", "");
+}
+
+function renderDistribution() {
+  if ($("distribution-form").contains(document.activeElement)) return;
+  const distribution = loadDistribution();
+  $("dist-breakfast").value = String(distribution.breakfast);
+  $("dist-lunch").value = String(distribution.lunch);
+  $("dist-dinner").value = String(distribution.dinner);
+  $("dist-lunch-start").value = minutesToTime(distribution.lunchStart);
+  $("dist-dinner-start").value = minutesToTime(distribution.dinnerStart);
+  clearDistributionErrors();
+  paintDistributionSum();
+  $("distribution-saved").hidden = true;
+}
+
+function onDistributionInput() {
+  $("distribution-saved").hidden = true;
+  clearDistributionErrors();
+  paintDistributionSum();
+}
+
+function onSaveDistribution(event) {
+  event.preventDefault();
+  const breakfast = parsePercent($("dist-breakfast").value);
+  const lunch = parsePercent($("dist-lunch").value);
+  const dinner = parsePercent($("dist-dinner").value);
+  const lunchStart = timeToMinutes($("dist-lunch-start").value);
+  const dinnerStart = timeToMinutes($("dist-dinner-start").value);
+  const percentError = "Enter a whole number from 0 to 100.";
+  setError("dist-breakfast-error", breakfast == null ? percentError : "");
+  setError("dist-lunch-error", lunch == null ? percentError : "");
+  setError("dist-dinner-error", dinner == null ? percentError : "");
+  const sum = paintDistributionSum();
+  setError("dist-sum-error", sum != null && sum !== 100 ? "Percents must add up to 100." : "");
+  let timeError = "";
+  if (lunchStart == null || dinnerStart == null) timeError = "Enter a start time.";
+  else if (lunchStart >= dinnerStart) timeError = "Lunch must start before dinner.";
+  setError("dist-time-error", timeError);
+  if (breakfast == null || lunch == null || dinner == null || sum !== 100 || timeError) return;
+  try {
+    saveDistribution({ breakfast, lunch, dinner, lunchStart, dinnerStart });
+  } catch (error) {
+    console.error(error);
+    setError("dist-sum-error", "Could not save.");
+    return;
+  }
+  $("distribution-saved").hidden = false;
+  $("distribution-saved").textContent = "Saved.";
+}
+
 async function onSaveTarget(event) {
   event.preventDefault();
   settingsTried = true;
@@ -974,7 +1104,10 @@ async function onImportFile(event) {
     setSettingsMsg(`${error.message} Nothing was changed.`);
     return;
   }
-  if (!confirm("Replace all current foods, entries, targets, and weigh-ins with this backup?")) return;
+  const scope = clean.distribution
+    ? "foods, entries, targets, weigh-ins, and meal distribution"
+    : "foods, entries, targets, and weigh-ins";
+  if (!confirm(`Replace all current ${scope} with this backup?`)) return;
   try {
     await replaceAll(clean);
     const targets = await ensureDefaultTarget(todayKey());
@@ -1049,6 +1182,9 @@ function bind() {
   $("target-form").addEventListener("submit", onSaveTarget);
   $("target-form").addEventListener("input", onProfileInput);
   $("target-form").addEventListener("change", onProfileInput);
+  $("distribution-form").addEventListener("submit", onSaveDistribution);
+  $("distribution-form").addEventListener("input", onDistributionInput);
+  $("distribution-form").addEventListener("change", onDistributionInput);
   $("weight-form").addEventListener("submit", onSaveWeight);
   $("weight-date").addEventListener("change", onWeightDateChange);
   $("delete-weight").addEventListener("click", onDeleteWeight);

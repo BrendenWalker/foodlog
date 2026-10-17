@@ -430,6 +430,7 @@ export async function ensureDefaultTarget(dateKey = todayKey()) {
 }
 
 export function exportAll() {
+  const distribution = loadDistribution();
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
@@ -441,6 +442,7 @@ export function exportAll() {
           entries: null,
           targets: null,
           weights: null,
+          distribution,
         };
         let pending = 4;
         for (const name of ["foods", "entries", "targets", "weights"]) {
@@ -499,6 +501,62 @@ export function parsePositiveInt(raw) {
   const canonical = text.replace(/^0+/, "");
   if (String(value) !== canonical) return null;
   return value;
+}
+
+export const DEFAULT_DISTRIBUTION = Object.freeze({
+  breakfast: 45,
+  lunch: 35,
+  dinner: 20,
+  lunchStart: 12 * 60,
+  dinnerStart: 17 * 60,
+});
+
+const DISTRIBUTION_KEY = "foodlog.distribution";
+
+function isPercent(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100;
+}
+
+function isMinute(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < 24 * 60;
+}
+
+export function normalizeDistribution(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { breakfast, lunch, dinner, lunchStart, dinnerStart } = raw;
+  if (!isPercent(breakfast) || !isPercent(lunch) || !isPercent(dinner)) return null;
+  if (breakfast + lunch + dinner !== 100) return null;
+  if (!isMinute(lunchStart) || !isMinute(dinnerStart) || lunchStart >= dinnerStart) return null;
+  return { breakfast, lunch, dinner, lunchStart, dinnerStart };
+}
+
+export function loadDistribution() {
+  try {
+    if (typeof localStorage === "undefined") return { ...DEFAULT_DISTRIBUTION };
+    const raw = localStorage.getItem(DISTRIBUTION_KEY);
+    if (raw == null) return { ...DEFAULT_DISTRIBUTION };
+    return normalizeDistribution(JSON.parse(raw)) || { ...DEFAULT_DISTRIBUTION };
+  } catch {
+    return { ...DEFAULT_DISTRIBUTION };
+  }
+}
+
+export function saveDistribution(value) {
+  const clean = normalizeDistribution(value);
+  if (!clean) throw new Error("The meal distribution is invalid.");
+  localStorage.setItem(DISTRIBUTION_KEY, JSON.stringify(clean));
+  return clean;
+}
+
+// Percent of the daily target allowed by this minute of the local day.
+export function paceCap(distribution, minutes) {
+  if (minutes < distribution.lunchStart) return distribution.breakfast;
+  if (minutes < distribution.dinnerStart) return distribution.breakfast + distribution.lunch;
+  return 100;
+}
+
+export function paceKcal(target, percent) {
+  return Math.round((target * percent) / 100);
 }
 
 function requireUnique(items, keyFn, label) {
@@ -618,7 +676,13 @@ export function validateImport(data) {
   requireUnique(entries, (entry) => entry.id, "entry");
   requireUnique(targets, (target) => target.effectiveDate, "calorie target");
   requireUnique(weights, (weight) => weight.dateKey, "weigh-in");
-  return { foods, entries, targets, weights };
+  const result = { foods, entries, targets, weights };
+  if (Object.hasOwn(data, "distribution")) {
+    const distribution = normalizeDistribution(data.distribution);
+    if (!distribution) fail("The meal distribution is invalid.");
+    result.distribution = distribution;
+  }
+  return result;
 }
 
 export function replaceAll(data) {
@@ -636,7 +700,9 @@ export function replaceAll(data) {
     for (const entry of data.entries) entries.put(entry);
     for (const target of data.targets) targets.put(target);
     for (const weight of data.weights) weights.put(weight);
-    return finish(tx);
+    return finish(tx).then(() => {
+      if (data.distribution) saveDistribution(data.distribution);
+    });
   });
 }
 
@@ -679,6 +745,7 @@ function selfCheckImport() {
     weights: [{ dateKey: "2020-01-01", pounds: 180.5, updatedAt: 1 }],
   });
   assertImport(version2.weights[0].pounds === 180.5, "version 2 weigh-in");
+  assertImport(version2.distribution == null, "missing distribution stays unset");
   assertImportFails(
     () =>
       validateImport({
@@ -767,5 +834,43 @@ function selfCheckServing() {
   assertImport(rankRecentFoods(many, manyEntries, now, 5).length === 5, "recent list caps at 5");
 }
 
+function selfCheckPace() {
+  const distribution = {
+    breakfast: 45,
+    lunch: 35,
+    dinner: 20,
+    lunchStart: 12 * 60,
+    dinnerStart: 17 * 60,
+  };
+  assertImport(paceCap(distribution, 11 * 60 + 59) === 45, "pace before lunch");
+  assertImport(paceCap(distribution, 12 * 60) === 80, "pace at lunch");
+  assertImport(paceCap(distribution, 17 * 60) === 100, "pace at dinner");
+  assertImport(paceKcal(2000, 45) === 900, "pace kcal");
+  assertImport(paceKcal(2000, 50) === 1000, "pace half");
+  const imported = validateImport({
+    schemaVersion: 2,
+    foods: [],
+    entries: [],
+    targets: [],
+    weights: [],
+    distribution,
+  });
+  assertImport(imported.distribution.lunchStart === 12 * 60, "import distribution");
+  assertImport(imported.distribution.dinner === 20, "import dinner share");
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [],
+        distribution: { ...distribution, dinner: 25 },
+      }),
+    "meal distribution",
+  );
+}
+
 selfCheckImport();
 selfCheckServing();
+selfCheckPace();

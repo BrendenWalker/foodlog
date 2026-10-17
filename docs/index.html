@@ -26,16 +26,20 @@
         <div class="status">
           <p class="status-main" id="status-main">0 / 2,000 kcal</p>
           <p class="status-sub" id="status-sub" aria-live="polite">2,000 kcal remaining</p>
-          <div
-            class="bar"
-            id="status-bar"
-            role="progressbar"
-            aria-valuemin="0"
-            aria-valuemax="2000"
-            aria-valuenow="0"
-            aria-label="Calories consumed today"
-          >
-            <div class="bar-fill" id="status-fill"></div>
+          <div class="bar-wrap">
+            <div
+              class="bar"
+              id="status-bar"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="2000"
+              aria-valuenow="0"
+              aria-label="Calories consumed today"
+            >
+              <div class="bar-fill" id="status-fill"></div>
+            </div>
+            <span class="bar-mark" id="status-mark-breakfast" hidden aria-hidden="true"></span>
+            <span class="bar-mark" id="status-mark-lunch" hidden aria-hidden="true"></span>
           </div>
         </div>
         <p id="today-error" class="error" hidden></p>
@@ -160,6 +164,7 @@
       <section id="view-settings" data-view="settings" hidden>
         <ul class="rows">
           <li><button type="button" class="row" data-open="calories">Calories</button></li>
+          <li><button type="button" class="row" data-open="distribution">Distribution</button></li>
           <li><button type="button" class="row" data-open="import">Import/Export</button></li>
         </ul>
       </section>
@@ -209,6 +214,37 @@
           <p id="target-hint" class="hint" hidden>Mifflin–St Jeor times activity level, minus 500 kcal for each pound per week.</p>
           <p id="target-error" class="error" hidden></p>
           <button type="submit" class="wide">Save</button>
+        </form>
+      </section>
+
+      <section id="view-distribution" data-view="distribution" hidden>
+        <form id="distribution-form">
+          <label for="dist-breakfast">Breakfast %</label>
+          <input id="dist-breakfast" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
+          <p id="dist-breakfast-error" class="error" hidden></p>
+
+          <label for="dist-lunch">Lunch %</label>
+          <input id="dist-lunch" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
+          <p id="dist-lunch-error" class="error" hidden></p>
+
+          <label for="dist-dinner">Dinner %</label>
+          <input id="dist-dinner" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
+          <p id="dist-dinner-error" class="error" hidden></p>
+
+          <p class="dist-sum-row">
+            <span id="dist-sum" class="hint"></span>
+            <span id="dist-sum-error" class="error" hidden></span>
+          </p>
+
+          <label for="dist-lunch-start">Lunch start</label>
+          <input id="dist-lunch-start" type="time" />
+
+          <label for="dist-dinner-start">Dinner start</label>
+          <input id="dist-dinner-start" type="time" enterkeyhint="done" />
+          <p id="dist-time-error" class="error" hidden></p>
+
+          <button type="submit" class="wide">Save</button>
+          <p id="distribution-saved" class="hint" role="status" hidden></p>
         </form>
       </section>
 
