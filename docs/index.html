@@ -76,6 +76,7 @@
           </div>
           <p id="weight-pounds-error" class="error" hidden></p>
           <button type="submit" class="wide">Save</button>
+          <p id="weight-saved" class="hint" role="status" hidden></p>
         </form>
         <button type="button" id="delete-weight" class="wide danger" hidden>Delete</button>
 
@@ -117,8 +118,8 @@
           <input id="food-name" autocomplete="off" enterkeyhint="next" />
           <p id="food-name-error" class="error" hidden></p>
 
-          <label for="food-serving">Serving size</label>
-          <input id="food-serving" autocomplete="off" enterkeyhint="next" />
+          <label for="food-serving">Serving size grams</label>
+          <input id="food-serving" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
           <p id="food-serving-error" class="error" hidden></p>
 
           <label for="food-calories">Calories</label>
@@ -147,8 +148,8 @@
 
       <section id="view-serve" data-view="serve" hidden>
         <form id="serve-form">
-          <label for="serve-amount">Serving size</label>
-          <input id="serve-amount" autocomplete="off" enterkeyhint="done" />
+          <label for="serve-amount">Serving size grams</label>
+          <input id="serve-amount" inputmode="numeric" autocomplete="off" enterkeyhint="done" />
           <p id="serve-error" class="error" hidden></p>
           <p id="serve-preview"></p>
           <button type="submit" class="wide">Add</button>

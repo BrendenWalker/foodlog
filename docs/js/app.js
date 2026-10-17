@@ -567,6 +567,7 @@ function applyWeightSelection(logs) {
   const row = logs.find((item) => item.dateKey === dateKey);
   $("weight-pounds").value = row ? formatPounds(row.pounds) : "";
   $("delete-weight").hidden = !row;
+  setError("weight-saved", "");
 }
 
 function dayStamp(dateKey) {
@@ -713,10 +714,14 @@ async function onSaveWeight(event) {
   const pounds = parsePounds($("weight-pounds").value);
   setError("weight-date-error", dateOk ? "" : "Pick a date that is today or earlier.");
   setError("weight-pounds-error", pounds == null ? "Enter a weight from 70 to 700 lb, with at most one decimal." : "");
+  setError("weight-saved", "");
   if (!dateOk || pounds == null) return;
   try {
     await saveWeight(dateKey, pounds);
     await renderWeight();
+    $("weight-pounds").value = "";
+    $("delete-weight").hidden = true;
+    setError("weight-saved", "Saved.");
   } catch (error) {
     console.error(error);
     setError("weight-pounds-error", "Could not save that weigh-in.");
