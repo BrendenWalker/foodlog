@@ -71,23 +71,60 @@ export function getAllEntries() {
   return readAll("entries");
 }
 
-export function getRecentFoods(limit = 10) {
+const DAY_MS = 86400000;
+
+function newerEntry(entry, current) {
+  if (!current || entry.timestamp !== current.timestamp) return !current || entry.timestamp > current.timestamp;
+  return String(entry.id) > String(current.id);
+}
+
+// ponytail: ranks by scanning every entry. Fine for one person's log; a use-count index is the upgrade if this list gets slow.
+export function rankRecentFoods(foods, entries, now, limit = 5) {
+  const stats = new Map();
+  for (const entry of entries) {
+    if (!entry || typeof entry.foodId !== "string" || entry.foodId === "") continue;
+    if (typeof entry.timestamp !== "number" || !Number.isFinite(entry.timestamp)) continue;
+    let stat = stats.get(entry.foodId);
+    if (!stat) {
+      stat = { count: 0, lastEntry: null };
+      stats.set(entry.foodId, stat);
+    }
+    stat.count += 1;
+    if (newerEntry(entry, stat.lastEntry)) stat.lastEntry = entry;
+  }
+  const ranked = [];
+  for (const food of foods) {
+    const stat = stats.get(food.id);
+    const lastAt = stat?.lastEntry?.timestamp ?? (typeof food.lastUsedAt === "number" ? food.lastUsedAt : null);
+    if (lastAt == null) continue;
+    const count = stat ? stat.count : 1;
+    const ageDays = Math.max(0, (now - lastAt) / DAY_MS);
+    const display = { ...food };
+    if (stat?.lastEntry) {
+      display.calories = stat.lastEntry.calories;
+      const serving = servingText(stat.lastEntry);
+      delete display.grams;
+      if (serving) display.serving = serving;
+      else delete display.serving;
+    }
+    ranked.push({ food: display, score: count / (1 + ageDays), lastAt });
+  }
+  ranked.sort(
+    (a, b) => b.score - a.score || b.lastAt - a.lastAt || a.food.name.localeCompare(b.food.name, undefined, { sensitivity: "base" }),
+  );
+  return ranked.slice(0, limit).map((row) => row.food);
+}
+
+export function getRecentFoods(limit = 5) {
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const tx = db.transaction("foods", "readonly");
-        const request = tx.objectStore("foods").index("lastUsedAt").openCursor(IDBKeyRange.lowerBound(0), "prev");
-        const foods = [];
-        request.onsuccess = () => {
-          const cursor = request.result;
-          if (!cursor || foods.length >= limit) {
-            resolve(foods);
-            return;
-          }
-          foods.push(cursor.value);
-          cursor.continue();
-        };
-        request.onerror = () => reject(request.error);
+        const tx = db.transaction(["foods", "entries"], "readonly");
+        const foodsRequest = tx.objectStore("foods").getAll();
+        const entriesRequest = tx.objectStore("entries").getAll();
+        tx.oncomplete = () => resolve(rankRecentFoods(foodsRequest.result, entriesRequest.result, Date.now(), limit));
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("The save was aborted."));
       }),
   );
 }
@@ -136,6 +173,51 @@ function applyServing(record, serving) {
   delete record.grams;
   if (!serving) delete record.serving;
   else record.serving = serving;
+}
+
+const VULGAR_FRACTIONS = {
+  "½": 1 / 2,
+  "⅓": 1 / 3,
+  "⅔": 2 / 3,
+  "¼": 1 / 4,
+  "¾": 3 / 4,
+  "⅛": 1 / 8,
+  "⅜": 3 / 8,
+  "⅝": 5 / 8,
+  "⅞": 7 / 8,
+};
+const VULGAR_CHARS = Object.keys(VULGAR_FRACTIONS).join("");
+const SERVING_QUANTITY = new RegExp(
+  `(\\d+)([${VULGAR_CHARS}])|(\\d+)\\s*/\\s*(\\d+(?:\\.\\d+)?)|(\\d+(?:\\.\\d+)?)|[${VULGAR_CHARS}]`,
+);
+
+// ponytail: first number in the serving text wins. "1 container (113g)" scales off 1, not 113.
+function servingQuantity(text) {
+  const match = String(text ?? "").match(SERVING_QUANTITY);
+  if (!match) return null;
+  let value = null;
+  if (match[2]) value = Number(match[1]) + VULGAR_FRACTIONS[match[2]];
+  else if (match[3]) {
+    const denom = Number(match[4]);
+    if (denom === 0) return null;
+    value = Number(match[3]) / denom;
+  } else if (match[5]) value = Number(match[5]);
+  else value = VULGAR_FRACTIONS[match[0]];
+  return Number.isFinite(value) ? value : null;
+}
+
+export function scaleServing(baseCalories, baseServing, nextServing) {
+  const base = String(baseServing ?? "").trim();
+  const next = String(nextServing ?? "").trim();
+  if (next.length > SERVING_MAX) return { error: `Serving size must be ${SERVING_MAX} characters or less.` };
+  if (next === base) return { calories: baseCalories, serving: next };
+  const baseQty = servingQuantity(base);
+  const nextQty = servingQuantity(next);
+  if (baseQty == null || baseQty === 0) return { error: "This serving has no number to scale from." };
+  if (nextQty == null) return { error: "Enter a serving with a number, like 2 or 80 g." };
+  const calories = Math.round(baseCalories * (nextQty / baseQty));
+  if (!isPositiveInt(calories)) return { error: "That serving is too small to log." };
+  return { calories, serving: next };
 }
 
 export function saveFood({ id, name, calories, category, serving = "" }) {
@@ -640,4 +722,50 @@ function selfCheckImport() {
   assertImport(parsePounds("69.9") === null, "reject under the minimum");
 }
 
+function selfCheckServing() {
+  assertImport(scaleServing(150, "40 g", " 40 g ").calories === 150, "unchanged serving");
+  assertImport(scaleServing(150, "40 g", "80 g").calories === 300, "double grams");
+  assertImport(scaleServing(150, "1 cup", "2 cups").calories === 300, "double cups");
+  assertImport(scaleServing(200, "½ cup", "1 cup").calories === 400, "half parses");
+  assertImport(servingQuantity("1½") === 1.5, "mixed fraction");
+  assertImport(scaleServing(100, "1 cup", "0.004 cup").error === "That serving is too small to log.", "zero calories");
+  assertImport(scaleServing(100, "a bowl", "two bowls").error === "This serving has no number to scale from.", "unscaled edit");
+  assertImport(scaleServing(100, "a bowl", "a bowl").calories === 100, "unnumbered unchanged");
+
+  const now = Date.UTC(2026, 9, 17);
+  const foods = [
+    { id: "often", name: "Oats", calories: 150, serving: "40 g", lastUsedAt: now },
+    { id: "once", name: "Cake", calories: 400, serving: "1 slice", lastUsedAt: now },
+    { id: "old", name: "Tea", calories: 5, lastUsedAt: now - 30 * DAY_MS },
+    { id: "never", name: "New", calories: 10, lastUsedAt: null },
+  ];
+  const entries = [
+    { id: "1", foodId: "often", name: "Oats", calories: 300, serving: "80 g", timestamp: now - DAY_MS },
+    { id: "2", foodId: "often", name: "Oats", calories: 150, serving: "40 g", timestamp: now },
+    { id: "3", foodId: "often", name: "Oats", calories: 150, serving: "40 g", timestamp: now - 2 * DAY_MS },
+    { id: "4", foodId: "once", name: "Cake", calories: 400, serving: "1 slice", timestamp: now },
+    { id: "5", foodId: null, name: "Quick add", calories: 50, timestamp: now },
+    { id: "6", foodId: "old", name: "Tea", calories: 5, timestamp: now - 30 * DAY_MS },
+  ];
+  const ranked = rankRecentFoods(foods, entries, now, 5);
+  assertImport(ranked.map((food) => food.id).join(",") === "often,once,old", "frequent recent ranks above a one-off");
+  assertImport(ranked[0].calories === 150 && ranked[0].serving === "40 g", "latest serving and calories");
+  assertImport(!ranked.some((food) => food.id === "never"), "never logged stays off the list");
+  const many = Array.from({ length: 6 }, (_, index) => ({
+    id: `f${index}`,
+    name: `Food ${index}`,
+    calories: 10,
+    lastUsedAt: now,
+  }));
+  const manyEntries = many.map((food, index) => ({
+    id: `e${index}`,
+    foodId: food.id,
+    name: food.name,
+    calories: 10,
+    timestamp: now - index * DAY_MS,
+  }));
+  assertImport(rankRecentFoods(many, manyEntries, now, 5).length === 5, "recent list caps at 5");
+}
+
 selfCheckImport();
+selfCheckServing();

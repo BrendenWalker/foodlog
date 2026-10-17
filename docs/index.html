@@ -145,6 +145,16 @@
         <p id="select-empty" class="empty" hidden>No foods yet.</p>
       </section>
 
+      <section id="view-serve" data-view="serve" hidden>
+        <form id="serve-form">
+          <label for="serve-amount">Serving size</label>
+          <input id="serve-amount" autocomplete="off" enterkeyhint="done" />
+          <p id="serve-error" class="error" hidden></p>
+          <p id="serve-preview"></p>
+          <button type="submit" class="wide">Add</button>
+        </form>
+      </section>
+
       <section id="view-settings" data-view="settings" hidden>
         <ul class="rows">
           <li><button type="button" class="row" data-open="calories">Calories</button></li>

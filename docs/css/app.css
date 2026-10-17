@@ -262,6 +262,7 @@ select {
 
 #food-form input,
 #food-form select,
+#serve-form input,
 #weight-form input,
 #target-form input:not([type="radio"]),
 #target-form select {
@@ -330,7 +331,8 @@ legend {
   accent-color: var(--accent);
 }
 
-#target-preview {
+#target-preview,
+#serve-preview {
   margin: 16px 0 0;
   font-size: 1.35rem;
   font-weight: 750;

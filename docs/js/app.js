@@ -26,6 +26,7 @@ import {
   SERVING_MAX,
   saveFood,
   saveWeight,
+  scaleServing,
   servingText,
   setTarget,
   validProfile,
@@ -53,6 +54,7 @@ const PARENT = {
   day: "history",
   "food-form": "library",
   select: "today",
+  serve: "select",
   calories: "settings",
   import: "settings",
 };
@@ -65,6 +67,7 @@ let undoEntry = null;
 let undoTimer = 0;
 let settingsTarget = null;
 let settingsTried = false;
+let servingFood = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -136,7 +139,8 @@ function show(name, title) {
   for (const section of document.querySelectorAll("[data-view]")) {
     section.hidden = section.dataset.view !== name;
   }
-  const tab = PARENT[name] || name;
+  let tab = name;
+  while (tab in PARENT) tab = PARENT[tab];
   for (const button of document.querySelectorAll("[data-tab]")) {
     if (button.dataset.tab === tab) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
@@ -290,7 +294,7 @@ async function renderToday() {
   const dateKey = todayKey();
   const [entries, recent, targets] = await Promise.all([
     getEntriesByDate(dateKey),
-    getRecentFoods(10),
+    getRecentFoods(),
     getTargets(),
   ]);
   const consumed = entries.reduce((sum, entry) => sum + entry.calories, 0);
@@ -364,7 +368,7 @@ function renderLibraryList() {
 
 function renderSelectList() {
   const matches = filteredFoods($("select-search").value, $("select-category").value);
-  const nodes = matches.map((food) => foodRow(food, onAdd, `Add ${food.name}`));
+  const nodes = matches.map((food) => foodRow(food, beginLibraryAdd, `Add ${food.name}`));
   const emptyText = foods.length === 0 ? "No foods yet. Add them in Library." : "No matching foods.";
   setList("select-list", "select-empty", nodes, emptyText);
 }
@@ -785,17 +789,57 @@ async function onQuickAdd(event) {
 }
 
 async function onAdd(food) {
+  const returnToToday = view === "select" || view === "serve";
   try {
     await addEntry(food);
     setError("today-error", "");
-    if (view === "select") show("today");
+    if (returnToToday) show("today");
     await renderToday();
   } catch (error) {
     console.error(error);
     setError("today-error", "Could not save that entry.");
-    if (view !== "today" && view !== "select") return;
-    if (view === "select") show("today");
+    if (!returnToToday && view !== "today") return;
+    if (returnToToday) show("today");
   }
+}
+
+function paintServePreview() {
+  const preview = $("serve-preview");
+  if (!servingFood) {
+    preview.textContent = "";
+    return;
+  }
+  const scaled = scaleServing(servingFood.calories, servingText(servingFood), $("serve-amount").value);
+  preview.textContent = scaled.calories == null ? "" : `${formatNum(scaled.calories)} kcal`;
+}
+
+function beginLibraryAdd(food) {
+  if (!servingText(food)) {
+    onAdd(food);
+    return;
+  }
+  servingFood = food;
+  const input = $("serve-amount");
+  input.value = servingText(food);
+  setError("serve-error", "");
+  paintServePreview();
+  show("serve", food.name);
+  input.focus();
+  input.select();
+}
+
+async function onServeAdd(event) {
+  event.preventDefault();
+  const food = servingFood;
+  if (!food) return;
+  const scaled = scaleServing(food.calories, servingText(food), $("serve-amount").value);
+  if (scaled.error) {
+    setError("serve-error", scaled.error);
+    paintServePreview();
+    return;
+  }
+  setError("serve-error", "");
+  await onAdd({ ...food, calories: scaled.calories, serving: scaled.serving });
 }
 
 async function openSelect() {
@@ -1009,6 +1053,11 @@ function bind() {
   $("library-search").addEventListener("input", renderLibraryList);
   $("select-search").addEventListener("input", onSelectSearch);
   $("select-category").addEventListener("change", renderSelectList);
+  $("serve-form").addEventListener("submit", onServeAdd);
+  $("serve-amount").addEventListener("input", () => {
+    setError("serve-error", "");
+    paintServePreview();
+  });
   for (const button of document.querySelectorAll("[data-tab]")) {
     button.addEventListener("click", () => onTab(button.dataset.tab));
   }
