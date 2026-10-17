@@ -1,8 +1,8 @@
 import { localDateKey, todayKey } from "./dates.js";
 
 const DB_NAME = "foodlog";
-const DB_VERSION = 1;
-export const SCHEMA_VERSION = 1;
+const DB_VERSION = 2;
+export const SCHEMA_VERSION = 2;
 export const FOOD_CATEGORIES = ["drink", "snack", "breakfast", "lunch", "dinner"];
 const FOOD_CATEGORY_SET = new Set(FOOD_CATEGORIES);
 
@@ -24,6 +24,9 @@ function openDb() {
         }
         if (!db.objectStoreNames.contains("targets")) {
           db.createObjectStore("targets", { keyPath: "effectiveDate" });
+        }
+        if (!db.objectStoreNames.contains("weights")) {
+          db.createObjectStore("weights", { keyPath: "dateKey" });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -250,6 +253,31 @@ export function putEntry(entry) {
   });
 }
 
+export function getAllWeights() {
+  return readAll("weights");
+}
+
+export function saveWeight(dateKey, pounds) {
+  const normalized = normalizePounds(pounds);
+  if (!isDateKey(dateKey) || dateKey > todayKey() || normalized == null) {
+    return Promise.reject(new Error("That weigh-in is not valid."));
+  }
+  return openDb().then((db) => {
+    const tx = db.transaction("weights", "readwrite");
+    const record = { dateKey, pounds: normalized, updatedAt: Date.now() };
+    tx.objectStore("weights").put(record);
+    return finish(tx, record);
+  });
+}
+
+export function deleteWeight(dateKey) {
+  return openDb().then((db) => {
+    const tx = db.transaction("weights", "readwrite");
+    tx.objectStore("weights").delete(dateKey);
+    return finish(tx);
+  });
+}
+
 export const LOSS_RATES = [0.5, 1, 1.5, 2, 2.5];
 export const BODY_LIMITS = { ageMin: 15, ageMax: 100, heightMin: 48, heightMax: 96, weightMin: 70, weightMax: 700 };
 
@@ -323,16 +351,17 @@ export function exportAll() {
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const tx = db.transaction(["foods", "entries", "targets"], "readonly");
+        const tx = db.transaction(["foods", "entries", "targets", "weights"], "readonly");
         const result = {
           schemaVersion: SCHEMA_VERSION,
           exportedAt: new Date().toISOString(),
           foods: null,
           entries: null,
           targets: null,
+          weights: null,
         };
-        let pending = 3;
-        for (const name of ["foods", "entries", "targets"]) {
+        let pending = 4;
+        for (const name of ["foods", "entries", "targets", "weights"]) {
           const request = tx.objectStore(name).getAll();
           request.onsuccess = () => {
             result[name] = request.result;
@@ -364,6 +393,20 @@ function isPositiveInt(value) {
 
 function isTimestamp(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function normalizePounds(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value * 10) / 10;
+  if (Math.abs(rounded - value) > 1e-6) return null;
+  if (rounded < BODY_LIMITS.weightMin || rounded > BODY_LIMITS.weightMax) return null;
+  return rounded;
+}
+
+export function parsePounds(raw) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+(\.\d)?$/.test(text)) return null;
+  return normalizePounds(Number(text));
 }
 
 export function parsePositiveInt(raw) {
@@ -461,11 +504,30 @@ function copyTarget(raw, index) {
   return { ...target, ...profile };
 }
 
+function copyWeight(raw, index) {
+  if (!raw || typeof raw !== "object") fail(`Weigh-in ${index} is not an object.`);
+  if (!isDateKey(raw.dateKey)) fail(`Weigh-in ${index} has an invalid date.`);
+  if (raw.dateKey > todayKey()) fail(`Weigh-in ${index} is in the future.`);
+  const pounds = normalizePounds(raw.pounds);
+  if (pounds == null) fail(`Weigh-in ${index} has an invalid weight.`);
+  const updatedAt = raw.updatedAt == null ? Date.now() : raw.updatedAt;
+  if (!isTimestamp(updatedAt)) fail(`Weigh-in ${index} has an invalid timestamp.`);
+  return { dateKey: raw.dateKey, pounds, updatedAt };
+}
+
 export function validateImport(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) fail("That file is not a backup.");
-  if (data.schemaVersion !== SCHEMA_VERSION) fail("This backup version is not supported.");
+  if (data.schemaVersion !== 1 && data.schemaVersion !== 2) fail("This backup version is not supported.");
   if (!Array.isArray(data.foods) || !Array.isArray(data.entries) || !Array.isArray(data.targets)) {
     fail("The backup is missing foods, entries, or targets.");
+  }
+  let weights;
+  if (data.schemaVersion === 1) {
+    if (Object.hasOwn(data, "weights")) fail("This backup version is not supported.");
+    weights = [];
+  } else {
+    if (!Array.isArray(data.weights)) fail("The backup is missing weigh-ins.");
+    weights = data.weights.map((raw, index) => copyWeight(raw, index + 1));
   }
   const foods = data.foods.map((raw, index) => copyFood(raw, index + 1));
   const entries = data.entries.map((raw, index) => copyEntry(raw, index + 1));
@@ -473,21 +535,109 @@ export function validateImport(data) {
   requireUnique(foods, (food) => food.id, "food");
   requireUnique(entries, (entry) => entry.id, "entry");
   requireUnique(targets, (target) => target.effectiveDate, "calorie target");
-  return { foods, entries, targets };
+  requireUnique(weights, (weight) => weight.dateKey, "weigh-in");
+  return { foods, entries, targets, weights };
 }
 
 export function replaceAll(data) {
   return openDb().then((db) => {
-    const tx = db.transaction(["foods", "entries", "targets"], "readwrite");
+    const tx = db.transaction(["foods", "entries", "targets", "weights"], "readwrite");
     const foods = tx.objectStore("foods");
     const entries = tx.objectStore("entries");
     const targets = tx.objectStore("targets");
+    const weights = tx.objectStore("weights");
     foods.clear();
     entries.clear();
     targets.clear();
+    weights.clear();
     for (const food of data.foods) foods.put(food);
     for (const entry of data.entries) entries.put(entry);
     for (const target of data.targets) targets.put(target);
+    for (const weight of data.weights) weights.put(weight);
     return finish(tx);
   });
 }
+
+function assertImport(condition, message) {
+  if (!condition) throw new Error(`db: ${message}`);
+}
+
+function assertImportFails(fn, snippet) {
+  try {
+    fn();
+  } catch (error) {
+    if (!String(error.message).toLowerCase().includes(snippet)) {
+      throw new Error(`db: expected "${snippet}" but got "${error.message}"`);
+    }
+    return;
+  }
+  throw new Error(`db: expected a failure containing "${snippet}"`);
+}
+
+function selfCheckImport() {
+  const version1 = validateImport({ schemaVersion: 1, foods: [], entries: [], targets: [] });
+  assertImport(version1.weights.length === 0, "version 1 has no weigh-ins");
+  assertImportFails(
+    () => validateImport({ schemaVersion: 1, foods: [], entries: [], targets: [], weights: [] }),
+    "not supported",
+  );
+  assertImportFails(
+    () => validateImport({ schemaVersion: 3, foods: [], entries: [], targets: [], weights: [] }),
+    "not supported",
+  );
+  assertImportFails(
+    () => validateImport({ schemaVersion: 2, foods: [], entries: [], targets: [] }),
+    "missing weigh-ins",
+  );
+  const version2 = validateImport({
+    schemaVersion: 2,
+    foods: [],
+    entries: [],
+    targets: [],
+    weights: [{ dateKey: "2020-01-01", pounds: 180.5, updatedAt: 1 }],
+  });
+  assertImport(version2.weights[0].pounds === 180.5, "version 2 weigh-in");
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [
+          { dateKey: "2020-01-01", pounds: 180 },
+          { dateKey: "2020-01-01", pounds: 181 },
+        ],
+      }),
+    "duplicate",
+  );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [{ dateKey: "2099-01-01", pounds: 180 }],
+      }),
+    "future",
+  );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [{ dateKey: "2020-01-01", pounds: 180.25 }],
+      }),
+    "invalid weight",
+  );
+  assertImport(parsePounds("180.5") === 180.5, "parse one decimal");
+  assertImport(parsePounds("180") === 180, "parse whole pounds");
+  assertImport(parsePounds("700") === 700, "allow the maximum");
+  assertImport(parsePounds("180.55") === null, "reject two decimals");
+  assertImport(parsePounds("69.9") === null, "reject under the minimum");
+}
+
+selfCheckImport();

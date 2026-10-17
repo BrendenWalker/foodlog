@@ -63,6 +63,42 @@
         <p id="history-empty" class="empty" hidden>No history yet.</p>
       </section>
 
+      <section id="view-weight" data-view="weight" hidden>
+        <form id="weight-form">
+          <label for="weight-date">Date</label>
+          <input id="weight-date" type="date" required />
+          <p id="weight-date-error" class="error" hidden></p>
+
+          <label for="weight-pounds">Weight</label>
+          <div class="inline-field">
+            <input id="weight-pounds" inputmode="decimal" autocomplete="off" enterkeyhint="done" />
+            <span>lb</span>
+          </div>
+          <p id="weight-pounds-error" class="error" hidden></p>
+          <button type="submit" class="wide">Save</button>
+        </form>
+        <button type="button" id="delete-weight" class="wide danger" hidden>Delete</button>
+
+        <div class="weight-stats">
+          <div>
+            <p id="weight-week" class="weight-rate">—</p>
+            <p class="hint">Last 7 days</p>
+          </div>
+          <div>
+            <p id="weight-month" class="weight-rate">—</p>
+            <p class="hint">Last 30 days</p>
+          </div>
+        </div>
+        <p class="hint">− is loss, + is gain.</p>
+        <svg id="weight-chart" class="weight-chart" role="img" hidden></svg>
+        <p id="weight-legend" class="hint" hidden>Dashed line is the scale. Solid line is the trend.</p>
+        <p id="weight-chart-empty" class="empty" hidden>Log a weight to see the trend.</p>
+
+        <h2>Log</h2>
+        <ul id="weight-list" class="rows"></ul>
+        <p id="weight-empty" class="empty" hidden>Nothing logged yet.</p>
+      </section>
+
       <section id="view-day" data-view="day" hidden>
         <ul id="day-entries" class="rows"></ul>
         <div id="day-summary" class="summary"></div>
@@ -181,6 +217,7 @@
       <button type="button" data-tab="today" aria-current="page">Today</button>
       <button type="button" data-tab="library">Library</button>
       <button type="button" data-tab="history">History</button>
+      <button type="button" data-tab="weight">Weight</button>
       <button type="button" data-tab="settings">Settings</button>
     </nav>
 

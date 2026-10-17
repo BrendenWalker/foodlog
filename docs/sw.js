@@ -1,5 +1,5 @@
 // Bump this name when the shell files change.
-const CACHE = "foodlog-shell-v13";
+const CACHE = "foodlog-shell-v15";
 
 // Shell only. IndexedDB is not cached here.
 // iOS may drop this worker after a long stretch of not opening the app; the next online open reinstalls it.
@@ -10,6 +10,7 @@ const ASSETS = [
   "./js/app.js",
   "./js/db.js",
   "./js/dates.js",
+  "./js/weight.js",
   "./manifest.webmanifest",
   "./icons/icon-180.png",
   "./icons/icon-192.png",

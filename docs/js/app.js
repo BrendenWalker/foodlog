@@ -10,23 +10,28 @@ import {
   dailyTargetCalories,
   deleteEntry,
   deleteFood,
+  deleteWeight,
   ensureDefaultTarget,
   exportAll,
   getAllEntries,
   getAllFoods,
+  getAllWeights,
   getEntriesByDate,
   getRecentFoods,
   getTargets,
+  parsePounds,
   parsePositiveInt,
   putEntry,
   replaceAll,
   SERVING_MAX,
   saveFood,
+  saveWeight,
   servingText,
   setTarget,
   validProfile,
   validateImport,
 } from "./db.js";
+import { trendSeries, weeklyRate } from "./weight.js";
 
 const CATEGORIES = FOOD_CATEGORIES.map((id) => ({
   id,
@@ -36,6 +41,7 @@ const CATEGORIES = FOOD_CATEGORIES.map((id) => ({
 const TITLES = {
   today: "Today",
   history: "History",
+  weight: "Weight",
   library: "Library",
   settings: "Settings",
   select: "Add from Library",
@@ -529,11 +535,197 @@ async function refresh() {
   if (view === "today") await renderToday();
   else if (view === "history") await renderHistory();
   else if (view === "day") await renderDay();
+  else if (view === "weight") await renderWeight();
   else if (view === "library") await renderLibrary();
   else if (view === "select") {
     await loadFoods();
     renderSelectList();
   } else if (view === "calories") await renderSettings();
+}
+
+function formatPounds(value) {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+// weeklyRate is pounds lost, so a loss is positive there. The page shows the
+// weight change instead: minus when the trend falls, plus when it rises.
+function formatRate(rate) {
+  if (rate == null) return "—";
+  const delta = Math.round(-rate * 10) / 10;
+  if (delta === 0) return "0.0 lb/week";
+  const sign = delta > 0 ? "+" : "−";
+  return `${sign}${Math.abs(delta).toFixed(1)} lb/week`;
+}
+
+function applyWeightSelection(logs) {
+  const dateKey = $("weight-date").value;
+  const row = logs.find((item) => item.dateKey === dateKey);
+  $("weight-pounds").value = row ? formatPounds(row.pounds) : "";
+  $("delete-weight").hidden = !row;
+}
+
+function dayStamp(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+
+function svgEl(name, attrs) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+  return node;
+}
+
+function paintWeightChart(series) {
+  const svg = $("weight-chart");
+  const legend = $("weight-legend");
+  const empty = $("weight-chart-empty");
+  svg.replaceChildren();
+  if (!series.length) {
+    svg.toggleAttribute("hidden", true);
+    svg.removeAttribute("aria-label");
+    legend.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+  legend.hidden = series.length < 2;
+  svg.toggleAttribute("hidden", false);
+  const width = 320;
+  const height = 188;
+  const padL = 46;
+  const padR = 8;
+  const padT = 10;
+  const padB = 24;
+  const values = series.flatMap((point) => [point.pounds, point.trend]);
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (max - min < 1) {
+    min -= 0.5;
+    max += 0.5;
+  } else {
+    const pad = (max - min) * 0.08;
+    min -= pad;
+    max += pad;
+  }
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const start = dayStamp(series[0].dateKey);
+  const end = dayStamp(series[series.length - 1].dateKey);
+  const span = Math.max(end - start, 1);
+  const xOf = (dateKey) => {
+    if (series.length === 1) return padL + plotW / 2;
+    return padL + ((dayStamp(dateKey) - start) / span) * plotW;
+  };
+  const yOf = (value) => padT + ((max - value) / (max - min)) * plotH;
+  const last = series[series.length - 1];
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height));
+  svg.setAttribute(
+    "aria-label",
+    `Weight and trend through ${formatDayLabel(last.dateKey)}. Latest ${formatPounds(last.pounds)} pounds, trend ${formatPounds(last.trend)} pounds.`,
+  );
+  svg.append(
+    svgEl("text", { x: padL - 6, y: padT + 4, "text-anchor": "end" }),
+    svgEl("text", { x: padL - 6, y: height - padB, "text-anchor": "end" }),
+  );
+  svg.children[0].textContent = (Math.round(max * 10) / 10).toFixed(1);
+  svg.children[1].textContent = (Math.round(min * 10) / 10).toFixed(1);
+  if (series.length > 1) {
+    svg.append(
+      svgEl("polyline", {
+        class: "scale",
+        points: series.map((point) => `${xOf(point.dateKey).toFixed(1)},${yOf(point.pounds).toFixed(1)}`).join(" "),
+      }),
+      svgEl("polyline", {
+        class: "trend",
+        points: series.map((point) => `${xOf(point.dateKey).toFixed(1)},${yOf(point.trend).toFixed(1)}`).join(" "),
+      }),
+    );
+  }
+  for (const point of series) {
+    svg.append(
+      svgEl("circle", {
+        class: "scale-dot",
+        cx: xOf(point.dateKey).toFixed(1),
+        cy: yOf(point.pounds).toFixed(1),
+        r: series.length === 1 ? 4 : 2.5,
+      }),
+    );
+  }
+  const firstLabel = svgEl("text", { x: padL, y: height - 6 });
+  firstLabel.textContent = formatDayLabel(series[0].dateKey);
+  svg.append(firstLabel);
+  if (series.length > 1) {
+    const lastLabel = svgEl("text", { x: width - padR, y: height - 6, "text-anchor": "end" });
+    lastLabel.textContent = formatDayLabel(last.dateKey);
+    svg.append(lastLabel);
+  }
+}
+
+async function renderWeight() {
+  const logs = await getAllWeights();
+  const dateInput = $("weight-date");
+  dateInput.max = todayKey();
+  if (!dateInput.value || dateInput.value > todayKey()) dateInput.value = todayKey();
+  setError("weight-date-error", "");
+  setError("weight-pounds-error", "");
+  applyWeightSelection(logs);
+  const series = trendSeries(logs);
+  $("weight-week").textContent = formatRate(weeklyRate(series, 7));
+  $("weight-month").textContent = formatRate(weeklyRate(series, 30));
+  paintWeightChart(series);
+  const newest = [...logs].sort((a, b) => (a.dateKey < b.dateKey ? 1 : a.dateKey > b.dateKey ? -1 : 0));
+  const nodes = newest.map((row) => {
+    const button = el("button", "day-row");
+    button.type = "button";
+    const copy = el("span", "day-copy");
+    copy.append(el("span", "day-date", formatDayLabel(row.dateKey)), el("span", "day-meta", `${formatPounds(row.pounds)} lb`));
+    button.append(copy);
+    button.addEventListener("click", () => {
+      dateInput.value = row.dateKey;
+      applyWeightSelection(logs);
+      setError("weight-date-error", "");
+      setError("weight-pounds-error", "");
+    });
+    const li = el("li");
+    li.append(button);
+    return li;
+  });
+  setList("weight-list", "weight-empty", nodes, "Nothing logged yet.");
+}
+
+async function onWeightDateChange() {
+  setError("weight-date-error", "");
+  setError("weight-pounds-error", "");
+  applyWeightSelection(await getAllWeights());
+}
+
+async function onSaveWeight(event) {
+  event.preventDefault();
+  const dateKey = $("weight-date").value;
+  const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(dateKey) && dateKey <= todayKey();
+  const pounds = parsePounds($("weight-pounds").value);
+  setError("weight-date-error", dateOk ? "" : "Pick a date that is today or earlier.");
+  setError("weight-pounds-error", pounds == null ? "Enter a weight from 70 to 700 lb, with at most one decimal." : "");
+  if (!dateOk || pounds == null) return;
+  try {
+    await saveWeight(dateKey, pounds);
+    await renderWeight();
+  } catch (error) {
+    console.error(error);
+    setError("weight-pounds-error", "Could not save that weigh-in.");
+  }
+}
+
+async function onDeleteWeight() {
+  const dateKey = $("weight-date").value;
+  if (!dateKey) return;
+  if (!confirm(`Delete the weigh-in for ${formatDayLong(dateKey)}?`)) return;
+  await deleteWeight(dateKey);
+  $("weight-pounds").value = "";
+  await renderWeight();
 }
 
 function clearUndo() {
@@ -733,7 +925,7 @@ async function onImportFile(event) {
     setSettingsMsg(`${error.message} Nothing was changed.`);
     return;
   }
-  if (!confirm("Replace all current foods, entries, and targets with this backup?")) return;
+  if (!confirm("Replace all current foods, entries, targets, and weigh-ins with this backup?")) return;
   try {
     await replaceAll(clean);
     const targets = await ensureDefaultTarget(todayKey());
@@ -771,6 +963,13 @@ function fillCategorySelect() {
   }
 }
 
+function assertRateSign() {
+  if (formatRate(1) !== "−1.0 lb/week") throw new Error("loss sign");
+  if (formatRate(-0.4) !== "+0.4 lb/week") throw new Error("gain sign");
+  if (formatRate(0) !== "0.0 lb/week") throw new Error("flat sign");
+  if (formatRate(null) !== "—") throw new Error("empty rate");
+}
+
 function assertCalorieFormula() {
   const calories = dailyTargetCalories({ sex: "male", age: 40, heightIn: 72, weightLb: 200, lbPerWeek: 1 });
   if (calories !== 1726) throw new Error("calorie formula");
@@ -801,6 +1000,9 @@ function bind() {
   $("target-form").addEventListener("submit", onSaveTarget);
   $("target-form").addEventListener("input", onProfileInput);
   $("target-form").addEventListener("change", onProfileInput);
+  $("weight-form").addEventListener("submit", onSaveWeight);
+  $("weight-date").addEventListener("change", onWeightDateChange);
+  $("delete-weight").addEventListener("click", onDeleteWeight);
   $("export-btn").addEventListener("click", onExport);
   $("import-btn").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", onImportFile);
@@ -820,6 +1022,7 @@ async function init() {
   assertSelectFilter();
   assertServingLabel();
   assertCalorieFormula();
+  assertRateSign();
   bind();
   await ensureDefaultTarget(todayKey());
   show("today");

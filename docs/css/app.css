@@ -262,6 +262,7 @@ select {
 
 #food-form input,
 #food-form select,
+#weight-form input,
 #target-form input:not([type="radio"]),
 #target-form select {
   width: 100%;
@@ -421,7 +422,7 @@ legend {
 .tabbar {
   bottom: 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   height: calc(var(--nav-h) + var(--safe-b));
   padding-bottom: var(--safe-b);
   background: var(--surface);
@@ -430,11 +431,64 @@ legend {
 
 .tabbar button {
   min-height: 44px;
+  padding: 0 2px;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.75rem;
   font-weight: 600;
+}
+
+.weight-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.weight-rate {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.weight-stats .hint {
+  margin: 2px 0 0;
+}
+
+.weight-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 320 / 188;
+  margin: 8px 0 4px;
+}
+
+.weight-chart .scale {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.weight-chart .scale-dot {
+  fill: var(--muted);
+}
+
+.weight-chart .trend {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.weight-chart text {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: inherit;
 }
 
 .tabbar button[aria-current="page"] {
