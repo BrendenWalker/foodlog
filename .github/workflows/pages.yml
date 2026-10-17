@@ -1,0 +1,55 @@
+name: Pages
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/configure-pages@v6
+      - name: Stamp release tag
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not re.fullmatch(r"v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", tag):
+              sys.exit(f"refusing non-semver tag {tag}")
+          html = pathlib.Path("docs/index.html")
+          html.write_text(html.read_text().replace(
+              '<span class="app-version"></span>',
+              f'<span class="app-version">{tag}</span>',
+              1))
+          sw = pathlib.Path("docs/sw.js")
+          updated, n = re.subn(
+              r'const CACHE = "[^"]*"',
+              f'const CACHE = "foodlog-{tag}"',
+              sw.read_text(),
+              count=1)
+          if n != 1:
+              sys.exit("cache name not found in docs/sw.js")
+          sw.write_text(updated)
+          PY
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+          include-hidden-files: true
+      - id: deployment
+        uses: actions/deploy-pages@v5

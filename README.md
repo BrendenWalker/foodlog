@@ -19,4 +19,15 @@ Foods, meals, and the daily calorie target stay in this browser. Use **Settings 
 
 ## Publish
 
-The app is the `docs/` folder. In the repository settings, set Pages to deploy from the `main` branch and the `/docs` folder. That publishes the install link above. The README stays in the repository and is not part of the site.
+The app is the `docs/` folder. The README stays in the repository and is not part of the site.
+
+A semver tag publishes the site. Pushes to `main` do not.
+
+Once, in the repository settings, open **Pages → Build and deployment** and set **Source** to **GitHub Actions**. While Source is still "Deploy from a branch", pushes to `main` keep publishing.
+
+```
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+Prerelease tags such as `v1.2.3-rc.1` publish too. The header shows the tag.

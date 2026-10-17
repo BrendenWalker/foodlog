@@ -82,6 +82,17 @@ button {
   font-weight: 700;
 }
 
+.app-version {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.app-version:empty {
+  display: none;
+}
+
 .back-btn {
   min-height: 44px;
   min-width: 64px;
