@@ -33,10 +33,14 @@ jobs:
           if not re.fullmatch(r"v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", tag):
               sys.exit(f"refusing non-semver tag {tag}")
           html = pathlib.Path("docs/index.html")
-          html.write_text(html.read_text().replace(
-              '<span class="app-version"></span>',
-              f'<span class="app-version">{tag}</span>',
-              1))
+          updated_html, n = re.subn(
+              r'(<span class="app-version">)[^<]*(</span>)',
+              rf'\g<1>{tag}\g<2>',
+              html.read_text(),
+              count=1)
+          if n != 1:
+              sys.exit("version label not found in docs/index.html")
+          html.write_text(updated_html)
           sw = pathlib.Path("docs/sw.js")
           updated, n = re.subn(
               r'const CACHE = "[^"]*"',

@@ -195,6 +195,7 @@ function placeMark(node, percent) {
 function paintMarks(distribution, show) {
   const breakfast = $("status-mark-breakfast");
   const lunch = $("status-mark-lunch");
+  if (!breakfast || !lunch) return;
   if (!show) {
     breakfast.hidden = true;
     lunch.hidden = true;
@@ -1217,8 +1218,20 @@ async function init() {
   await ensureDefaultTarget(todayKey());
   show("today");
   await renderToday();
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch((error) => console.error(error));
+    let reloading = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
+    navigator.serviceWorker
+      .register("./sw.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch((error) => console.error(error));
   }
 }
 

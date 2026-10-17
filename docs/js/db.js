@@ -29,7 +29,18 @@ function openDb() {
           db.createObjectStore("weights", { keyPath: "dateKey" });
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
+        resolve(db);
+      };
+      request.onblocked = () => {
+        dbPromise = null;
+        reject(new Error("Saved data is open in another window."));
+      };
       request.onerror = () => {
         dbPromise = null;
         reject(request.error);
