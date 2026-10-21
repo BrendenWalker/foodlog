@@ -151,6 +151,25 @@
         <p id="select-empty" class="empty" hidden>No foods yet.</p>
       </section>
 
+      <section id="view-meal" data-view="meal" hidden>
+        <form id="meal-form">
+          <label for="meal-name">Name</label>
+          <input id="meal-name" autocomplete="off" enterkeyhint="next" />
+
+          <input id="meal-search" class="search" type="search" placeholder="Search foods" enterkeyhint="search" aria-label="Search foods" />
+          <ul id="meal-results" class="rows" hidden></ul>
+          <p id="meal-results-empty" class="empty" hidden>No matching foods.</p>
+
+          <ul id="meal-lines" class="rows" hidden></ul>
+          <p id="meal-lines-empty" class="empty">Search for a food and enter its weight.</p>
+
+          <p id="meal-total"></p>
+          <p id="meal-error" class="error" hidden></p>
+          <button type="button" id="meal-add" class="wide">Add to today</button>
+        </form>
+        <p class="hint">Stays on this phone until you add it to today.</p>
+      </section>
+
       <section id="view-serve" data-view="serve" hidden>
         <form id="serve-form">
           <label for="serve-amount">Serving size grams</label>
@@ -263,6 +282,7 @@
 
     <nav class="tabbar" aria-label="Primary">
       <button type="button" data-tab="today" aria-current="page">Today</button>
+      <button type="button" data-tab="meal">Meal</button>
       <button type="button" data-tab="library">Library</button>
       <button type="button" data-tab="history">History</button>
       <button type="button" data-tab="weight">Weight</button>

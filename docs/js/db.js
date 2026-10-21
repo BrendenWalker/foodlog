@@ -231,6 +231,81 @@ export function scaleServing(baseCalories, baseServing, nextServing) {
   return { calories, serving: next };
 }
 
+// A weighed meal only scales servings that are already grams. "1 cup" stays on the serve screen.
+export const GRAM_MAX = 5000;
+
+export function gramsInServing(text) {
+  const match = /^(\d+(?:\.\d+)?)\s*(g|grams?)?$/i.exec(String(text ?? "").trim());
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value;
+}
+
+export function scaleByGrams(baseCalories, baseServing, grams) {
+  if (!isPositiveInt(baseCalories)) return { error: "That portion is too small to log." };
+  const base = gramsInServing(baseServing);
+  if (base == null) return { error: "This serving is not in grams." };
+  if (!isPositiveInt(grams) || grams > GRAM_MAX) return { error: `Enter a weight from 1 to ${GRAM_MAX} g.` };
+  const calories = Math.round(baseCalories * (grams / base));
+  if (!isPositiveInt(calories)) return { error: "That portion is too small to log." };
+  return { calories, grams };
+}
+
+// ponytail: same localStorage pocket as the meal distribution. Survives a closed phone.
+// Cleared when the meal is logged. Not part of the backup. Ceiling is 20 lines.
+const MEAL_DRAFT_KEY = "foodlog.mealDraft";
+export const MEAL_NAME_MAX = 120;
+export const MEAL_LINES_MAX = 20;
+
+export function emptyMealDraft() {
+  return { name: "", nameEdited: false, lines: [] };
+}
+
+export function normalizeMealDraft(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return emptyMealDraft();
+  const name = typeof raw.name === "string" ? raw.name.slice(0, MEAL_NAME_MAX) : "";
+  const nameEdited = raw.nameEdited === true;
+  const lines = [];
+  if (Array.isArray(raw.lines)) {
+    for (const line of raw.lines) {
+      if (lines.length >= MEAL_LINES_MAX) break;
+      if (!line || typeof line !== "object" || Array.isArray(line)) continue;
+      if (typeof line.foodId !== "string" || line.foodId === "" || line.foodId.length > 80) continue;
+      if (typeof line.grams !== "string" || !/^\d{0,6}$/.test(line.grams)) continue;
+      lines.push({ foodId: line.foodId, grams: line.grams });
+    }
+  }
+  return { name, nameEdited, lines };
+}
+
+export function loadMealDraft() {
+  try {
+    if (typeof localStorage === "undefined") return emptyMealDraft();
+    const raw = localStorage.getItem(MEAL_DRAFT_KEY);
+    if (raw == null) return emptyMealDraft();
+    return normalizeMealDraft(JSON.parse(raw));
+  } catch {
+    return emptyMealDraft();
+  }
+}
+
+export function saveMealDraft(draft) {
+  const clean = normalizeMealDraft(draft);
+  if (typeof localStorage === "undefined") return clean;
+  if (clean.lines.length === 0 && clean.name.trim() === "") {
+    localStorage.removeItem(MEAL_DRAFT_KEY);
+    return clean;
+  }
+  localStorage.setItem(MEAL_DRAFT_KEY, JSON.stringify(clean));
+  return clean;
+}
+
+export function clearMealDraft() {
+  if (typeof localStorage === "undefined") return;
+  localStorage.removeItem(MEAL_DRAFT_KEY);
+}
+
 export function saveFood({ id, name, calories, category, serving = "" }) {
   if (!FOOD_CATEGORY_SET.has(category)) {
     return Promise.reject(new Error("Category is required."));
@@ -819,6 +894,33 @@ function selfCheckServing() {
   assertImport(scaleServing(100, "1 cup", "0.004 cup").error === "That serving is too small to log.", "zero calories");
   assertImport(scaleServing(100, "a bowl", "two bowls").error === "This serving has no number to scale from.", "unscaled edit");
   assertImport(scaleServing(100, "a bowl", "a bowl").calories === 100, "unnumbered unchanged");
+  assertImport(gramsInServing("40 g") === 40, "grams with unit");
+  assertImport(gramsInServing("40") === 40, "bare grams");
+  assertImport(gramsInServing("100g") === 100, "grams without a space");
+  assertImport(gramsInServing("40 grams") === 40, "grams word");
+  assertImport(gramsInServing(" 40 g ") === 40, "trimmed grams");
+  assertImport(gramsInServing("1 cup") === null, "cups are not grams");
+  assertImport(gramsInServing("40 g cooked") === null, "extra words are not grams");
+  assertImport(scaleByGrams(150, "40 g", 80).calories === 300, "double weight");
+  assertImport(scaleByGrams(100, "40.5 g", 81).calories === 200, "decimal base grams");
+  assertImport(scaleByGrams(200, "1 cup", 150).error === "This serving is not in grams.", "cup refused");
+  assertImport(scaleByGrams(1, "100 g", 1).error === "That portion is too small to log.", "rounds to zero");
+  assertImport(scaleByGrams(150, "40 g", 5001).error === "Enter a weight from 1 to 5000 g.", "gram cap");
+  const draft = normalizeMealDraft({
+    name: "x".repeat(200),
+    nameEdited: true,
+    lines: [
+      { foodId: "rice", grams: "180" },
+      { foodId: "", grams: "1" },
+      { foodId: "bad", grams: "80g" },
+      ...Array.from({ length: 25 }, (_, index) => ({ foodId: `f${index}`, grams: "" })),
+    ],
+  });
+  assertImport(draft.name.length === MEAL_NAME_MAX && draft.nameEdited === true, "draft name cap");
+  assertImport(draft.lines[0].foodId === "rice" && draft.lines[0].grams === "180", "draft keeps a weighed line");
+  assertImport(draft.lines.length === MEAL_LINES_MAX, "draft line cap");
+  assertImport(normalizeMealDraft(null).lines.length === 0, "missing draft");
+  assertImport(normalizeMealDraft({ nameEdited: "yes", lines: [{ foodId: 4, grams: "1" }] }).nameEdited === false, "draft rejects junk");
 
   const now = Date.UTC(2026, 9, 17);
   const foods = [

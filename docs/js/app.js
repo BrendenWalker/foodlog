@@ -14,6 +14,15 @@ import {
   ensureDefaultTarget,
   exportAll,
   loadDistribution,
+  loadMealDraft,
+  emptyMealDraft,
+  clearMealDraft,
+  saveMealDraft,
+  GRAM_MAX,
+  MEAL_LINES_MAX,
+  MEAL_NAME_MAX,
+  gramsInServing,
+  scaleByGrams,
   getAllEntries,
   getAllFoods,
   getAllWeights,
@@ -46,6 +55,7 @@ const CATEGORIES = FOOD_CATEGORIES.map((id) => ({
 
 const TITLES = {
   today: "Today",
+  meal: "Meal",
   history: "History",
   weight: "Weight",
   library: "Library",
@@ -75,6 +85,7 @@ let undoTimer = 0;
 let settingsTarget = null;
 let settingsTried = false;
 let servingFood = null;
+let mealDraft = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -611,6 +622,7 @@ async function refresh() {
   else if (view === "history") await renderHistory();
   else if (view === "day") await renderDay();
   else if (view === "weight") await renderWeight();
+  else if (view === "meal") await renderMeal();
   else if (view === "library") await renderLibrary();
   else if (view === "select") {
     await loadFoods();
@@ -1131,6 +1143,7 @@ async function onImportFile(event) {
 
 async function onTab(name) {
   if (name === "settings") setSettingsMsg("");
+  if (name === "weight" && view !== "weight") $("weight-date").value = todayKey();
   show(name);
   await refresh();
 }
@@ -1174,6 +1187,228 @@ function assertCalorieFormula() {
   if (low !== 4) throw new Error("calorie floor fixture");
 }
 
+function ensureMealDraft() {
+  if (!mealDraft) mealDraft = loadMealDraft();
+  return mealDraft;
+}
+
+function mealFood(foodId) {
+  return foods.find((food) => food.id === foodId) || null;
+}
+
+function joinedMealName(lines) {
+  const names = [];
+  for (const line of lines) {
+    const food = mealFood(line.foodId);
+    if (food) names.push(food.name);
+  }
+  return names.join(" + ").slice(0, MEAL_NAME_MAX);
+}
+
+function syncMealName() {
+  if (mealDraft.nameEdited) return;
+  mealDraft.name = joinedMealName(mealDraft.lines);
+  const input = $("meal-name");
+  if (document.activeElement !== input) input.value = mealDraft.name;
+}
+
+function portionOf(line) {
+  const food = mealFood(line.foodId);
+  if (!food) return { error: "This food is no longer in the library." };
+  if (gramsInServing(servingText(food)) == null) return { error: "This serving is not in grams." };
+  if (line.grams === "") return { pending: true };
+  const grams = parsePositiveInt(line.grams);
+  if (grams == null) return { error: `Enter a weight from 1 to ${GRAM_MAX} g.` };
+  return scaleByGrams(food.calories, servingText(food), grams);
+}
+
+function persistMeal() {
+  try {
+    saveMealDraft(mealDraft);
+  } catch (error) {
+    console.error(error);
+    setError("meal-error", "Could not keep this meal on the phone.");
+  }
+}
+
+function paintMealTotal() {
+  let calories = 0;
+  let grams = 0;
+  let ready = 0;
+  for (const line of mealDraft.lines) {
+    const portion = portionOf(line);
+    if (portion.calories == null) continue;
+    if (!Number.isSafeInteger(calories + portion.calories) || !Number.isSafeInteger(grams + portion.grams)) break;
+    calories += portion.calories;
+    grams += portion.grams;
+    ready += 1;
+  }
+  $("meal-total").textContent = ready === 0 ? "" : `${formatNum(calories)} kcal · ${formatNum(grams)} g`;
+}
+
+function mealProblem() {
+  if (mealDraft.lines.length === 0) return "Add a food and its weight.";
+  let calories = 0;
+  let grams = 0;
+  let ready = 0;
+  for (const line of mealDraft.lines) {
+    const food = mealFood(line.foodId);
+    const portion = portionOf(line);
+    const label = food ? food.name : "Removed food";
+    if (portion.pending) return `Enter a weight for ${label}.`;
+    if (portion.error) return `${label}: ${portion.error}`;
+    calories += portion.calories;
+    grams += portion.grams;
+    ready += 1;
+    if (!Number.isSafeInteger(calories) || !Number.isSafeInteger(grams)) return "That meal is too large to log.";
+  }
+  if (ready === 0 || calories <= 0) return "That meal is too small to log.";
+  const name = mealDraft.name.trim();
+  if (!name) return "Name is required.";
+  if (name.length > MEAL_NAME_MAX) return `Name must be ${MEAL_NAME_MAX} characters or less.`;
+  return "";
+}
+
+function renderMealLines() {
+  const nodes = mealDraft.lines.map((line, index) => {
+    const food = mealFood(line.foodId);
+    const name = food ? food.name : "Removed food";
+    const portion = portionOf(line);
+    const li = el("li", "meal-line");
+    const head = el("div", "meal-line-head");
+    const kcal = el("span", "meal-kcal", portion.calories == null ? "" : `${formatNum(portion.calories)} kcal`);
+    head.append(el("span", "row-name", name), kcal);
+    const field = el("div", "inline-field");
+    const input = document.createElement("input");
+    input.inputMode = "numeric";
+    input.autocomplete = "off";
+    input.enterKeyHint = "done";
+    input.maxLength = String(GRAM_MAX).length + 1;
+    input.className = "meal-grams";
+    input.setAttribute("aria-label", `${name} grams`);
+    input.value = line.grams;
+    const remove = el("button", "remove-btn", "Remove");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${name}`);
+    const err = el("p", "error", portion.error || "");
+    err.hidden = !portion.error;
+    input.addEventListener("input", () => {
+      const digits = input.value.replace(/\D/g, "").slice(0, input.maxLength);
+      if (input.value !== digits) input.value = digits;
+      mealDraft.lines[index].grams = digits;
+      setError("meal-error", "");
+      persistMeal();
+      const next = portionOf(mealDraft.lines[index]);
+      kcal.textContent = next.calories == null ? "" : `${formatNum(next.calories)} kcal`;
+      err.hidden = !next.error;
+      err.textContent = next.error || "";
+      paintMealTotal();
+    });
+    remove.addEventListener("click", () => {
+      mealDraft.lines.splice(index, 1);
+      syncMealName();
+      setError("meal-error", "");
+      persistMeal();
+      renderMealLines();
+      paintMealTotal();
+    });
+    field.append(input, el("span", "", "g"), remove);
+    li.append(head, field, err);
+    return li;
+  });
+  setList("meal-lines", "meal-lines-empty", nodes, "Search for a food and enter its weight.");
+}
+
+function renderMealSearch() {
+  const query = $("meal-search").value.trim();
+  if (!query) {
+    $("meal-results").replaceChildren();
+    $("meal-results").hidden = true;
+    $("meal-results-empty").hidden = true;
+    return;
+  }
+  const matches = filteredFoods(query);
+  const nodes = matches.map((food) => foodRow(food, addMealLine, `Add ${food.name}`));
+  const emptyText = foods.length === 0 ? "No foods yet. Add them in Library." : "No matching foods.";
+  setList("meal-results", "meal-results-empty", nodes, emptyText);
+}
+
+function addMealLine(food) {
+  ensureMealDraft();
+  if (mealDraft.lines.length >= MEAL_LINES_MAX) {
+    setError("meal-error", `A meal can include ${MEAL_LINES_MAX} foods.`);
+    return;
+  }
+  mealDraft.lines.push({ foodId: food.id, grams: "" });
+  syncMealName();
+  $("meal-search").value = "";
+  setError("meal-error", "");
+  persistMeal();
+  renderMealSearch();
+  renderMealLines();
+  paintMealTotal();
+  const input = $("meal-lines").querySelector("li:last-child input");
+  if (input) input.focus();
+}
+
+function onMealName() {
+  ensureMealDraft();
+  const input = $("meal-name");
+  if (input.value.length > MEAL_NAME_MAX) input.value = input.value.slice(0, MEAL_NAME_MAX);
+  mealDraft.name = input.value;
+  mealDraft.nameEdited = true;
+  setError("meal-error", "");
+  persistMeal();
+}
+
+async function renderMeal() {
+  await loadFoods();
+  ensureMealDraft();
+  syncMealName();
+  const nameInput = $("meal-name");
+  if (document.activeElement !== nameInput) nameInput.value = mealDraft.name;
+  setError("meal-error", "");
+  renderMealSearch();
+  renderMealLines();
+  paintMealTotal();
+}
+
+async function onMealAdd() {
+  ensureMealDraft();
+  syncMealName();
+  const problem = mealProblem();
+  if (problem) {
+    setError("meal-error", problem);
+    return;
+  }
+  const name = mealDraft.name.trim();
+  let calories = 0;
+  let grams = 0;
+  for (const line of mealDraft.lines) {
+    const portion = portionOf(line);
+    calories += portion.calories;
+    grams += portion.grams;
+  }
+  setError("meal-error", "");
+  try {
+    await addEntry({ name, calories, serving: `${grams} g` });
+  } catch (error) {
+    console.error(error);
+    setError("meal-error", "Could not save that entry.");
+    return;
+  }
+  mealDraft = emptyMealDraft();
+  try {
+    clearMealDraft();
+  } catch (error) {
+    console.error(error);
+  }
+  $("meal-name").value = "";
+  $("meal-search").value = "";
+  show("today");
+  await renderToday();
+}
+
 function bind() {
   fillCategorySelect();
   fillActivitySelect();
@@ -1200,6 +1435,14 @@ function bind() {
   $("library-search").addEventListener("input", renderLibraryList);
   $("select-search").addEventListener("input", onSelectSearch);
   $("select-category").addEventListener("change", renderSelectList);
+  $("meal-form").addEventListener("submit", (event) => event.preventDefault());
+  $("meal-add").addEventListener("click", onMealAdd);
+  $("meal-name").maxLength = MEAL_NAME_MAX;
+  $("meal-name").addEventListener("input", onMealName);
+  $("meal-search").addEventListener("input", () => {
+    setError("meal-error", "");
+    renderMealSearch();
+  });
   $("serve-form").addEventListener("submit", onServeAdd);
   $("serve-amount").addEventListener("input", () => {
     setError("serve-error", "");

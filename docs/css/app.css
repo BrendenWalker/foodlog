@@ -379,7 +379,8 @@ legend {
 }
 
 #target-preview,
-#serve-preview {
+#serve-preview,
+#meal-total {
   margin: 16px 0 0;
   font-size: 1.35rem;
   font-weight: 750;
@@ -471,7 +472,7 @@ legend {
 .tabbar {
   bottom: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   height: calc(var(--nav-h) + var(--safe-b));
   padding-bottom: var(--safe-b);
   background: var(--surface);
@@ -484,8 +485,41 @@ legend {
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 600;
+}
+
+.meal-line {
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.meal-line-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.meal-kcal {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#meal-name,
+#meal-search {
+  width: 100%;
+}
+
+#meal-search {
+  margin-top: 12px;
+}
+
+.inline-field input.meal-grams {
+  flex: 0 1 8rem;
+  width: 8rem;
 }
 
 .weight-stats {
