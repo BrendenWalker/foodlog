@@ -292,7 +292,7 @@ function recentRow(food) {
   const add = el("button", "add-btn", "Add");
   add.type = "button";
   add.setAttribute("aria-label", `Add ${food.name}`);
-  add.addEventListener("click", () => onAdd(food));
+  add.addEventListener("click", () => beginLibraryAdd(food));
   li.append(main, add);
   return li;
 }
@@ -908,6 +908,7 @@ function beginLibraryAdd(food) {
     return;
   }
   servingFood = food;
+  PARENT.serve = view === "select" ? "select" : "today";
   const input = $("serve-amount");
   input.value = servingText(food);
   setError("serve-error", "");
