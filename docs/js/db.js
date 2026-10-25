@@ -3,8 +3,68 @@ import { localDateKey, todayKey } from "./dates.js";
 const DB_NAME = "foodlog";
 const DB_VERSION = 2;
 export const SCHEMA_VERSION = 2;
-export const FOOD_CATEGORIES = ["drink", "snack", "breakfast", "lunch", "dinner"];
-const FOOD_CATEGORY_SET = new Set(FOOD_CATEGORIES);
+export const CATEGORY_NAME_MAX = 40;
+const CATEGORY_ID_MAX = 80;
+const CATEGORIES_KEY = "foodlog.categories";
+
+export const DEFAULT_CATEGORIES = Object.freeze([
+  Object.freeze({ id: "drink", label: "Drink" }),
+  Object.freeze({ id: "snack", label: "Snack" }),
+  Object.freeze({ id: "breakfast", label: "Breakfast" }),
+  Object.freeze({ id: "lunch", label: "Lunch" }),
+  Object.freeze({ id: "dinner", label: "Dinner" }),
+]);
+
+export function defaultCategories() {
+  return DEFAULT_CATEGORIES.map((category) => ({ id: category.id, label: category.label }));
+}
+
+export function normalizeCategories(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const categories = [];
+  const ids = new Set();
+  const labels = new Set();
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    if (typeof item.id !== "string") return null;
+    const id = item.id.trim();
+    if (id === "" || id.length > CATEGORY_ID_MAX || id.toLowerCase() === "uncategorized") return null;
+    if (typeof item.label !== "string") return null;
+    const label = item.label.trim();
+    if (label === "" || label.length > CATEGORY_NAME_MAX || label.toLowerCase() === "uncategorized") return null;
+    const labelKey = label.toLowerCase();
+    if (ids.has(id) || labels.has(labelKey)) return null;
+    ids.add(id);
+    labels.add(labelKey);
+    categories.push({ id, label });
+  }
+  return categories;
+}
+
+export function loadCategories() {
+  try {
+    if (typeof localStorage === "undefined") return defaultCategories();
+    const raw = localStorage.getItem(CATEGORIES_KEY);
+    if (raw == null) return defaultCategories();
+    return normalizeCategories(JSON.parse(raw)) || defaultCategories();
+  } catch {
+    return defaultCategories();
+  }
+}
+
+export function saveCategories(value) {
+  const clean = normalizeCategories(value);
+  if (!clean) throw new Error("The categories are invalid.");
+  localStorage.setItem(CATEGORIES_KEY, JSON.stringify(clean));
+  return clean;
+}
+
+export function reassignFoods(foods, fromId, toId) {
+  if (typeof fromId !== "string" || typeof toId !== "string" || fromId === "" || fromId === toId) {
+    throw new Error("Pick a different category.");
+  }
+  return foods.map((food) => (food && food.category === fromId ? { ...food, category: toId } : food));
+}
 
 let dbPromise;
 
@@ -307,7 +367,8 @@ export function clearMealDraft() {
 }
 
 export function saveFood({ id, name, calories, category, serving = "" }) {
-  if (!FOOD_CATEGORY_SET.has(category)) {
+  const allowed = new Set(loadCategories().map((item) => item.id));
+  if (!allowed.has(category)) {
     return Promise.reject(new Error("Category is required."));
   }
   if (typeof serving !== "string" || serving.trim().length > SERVING_MAX) {
@@ -372,6 +433,25 @@ export function deleteFood(id) {
   return openDb().then((db) => {
     const tx = db.transaction("foods", "readwrite");
     tx.objectStore("foods").delete(id);
+    return finish(tx);
+  });
+}
+
+export function moveFoodsToCategory(fromId, toId) {
+  const known = new Set(loadCategories().map((category) => category.id));
+  if (!known.has(fromId) || !known.has(toId) || fromId === toId) {
+    return Promise.reject(new Error("Pick a different category."));
+  }
+  return openDb().then((db) => {
+    const tx = db.transaction("foods", "readwrite");
+    const store = tx.objectStore("foods");
+    const request = store.getAll();
+    request.onsuccess = () => {
+      const next = reassignFoods(request.result, fromId, toId);
+      for (let index = 0; index < next.length; index++) {
+        if (next[index] !== request.result[index]) store.put(next[index]);
+      }
+    };
     return finish(tx);
   });
 }
@@ -517,6 +597,7 @@ export async function ensureDefaultTarget(dateKey = todayKey()) {
 
 export function exportAll() {
   const distribution = loadDistribution();
+  const categories = loadCategories();
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
@@ -528,6 +609,7 @@ export function exportAll() {
           entries: null,
           targets: null,
           weights: null,
+          categories,
           distribution,
         };
         let pending = 4;
@@ -664,7 +746,7 @@ function requireUnique(items, keyFn, label) {
   }
 }
 
-function copyFood(raw, index) {
+function copyFood(raw, index, allowed) {
   if (!raw || typeof raw !== "object") fail(`Food ${index} is not an object.`);
   if (typeof raw.id !== "string" || raw.id.trim() === "") fail(`Food ${index} is missing an id.`);
   if (typeof raw.name !== "string" || raw.name.trim() === "") fail(`Food ${index} is missing a name.`);
@@ -680,7 +762,7 @@ function copyFood(raw, index) {
   if (!isTimestamp(createdAt) || !isTimestamp(updatedAt)) fail(`Food ${index} has an invalid timestamp.`);
   let category = null;
   if (raw.category != null) {
-    if (typeof raw.category !== "string" || !FOOD_CATEGORY_SET.has(raw.category)) {
+    if (typeof raw.category !== "string" || !allowed.has(raw.category)) {
       fail(`Food ${index} has an invalid category.`);
     }
     category = raw.category;
@@ -765,7 +847,13 @@ export function validateImport(data) {
     if (!Array.isArray(data.weights)) fail("The backup is missing weigh-ins.");
     weights = data.weights.map((raw, index) => copyWeight(raw, index + 1));
   }
-  const foods = data.foods.map((raw, index) => copyFood(raw, index + 1));
+  let categories;
+  if (Object.hasOwn(data, "categories")) {
+    categories = normalizeCategories(data.categories);
+    if (!categories) fail("The categories are invalid.");
+  }
+  const allowed = new Set((categories || defaultCategories()).map((category) => category.id));
+  const foods = data.foods.map((raw, index) => copyFood(raw, index + 1, allowed));
   const entries = data.entries.map((raw, index) => copyEntry(raw, index + 1));
   const targets = data.targets.map((raw, index) => copyTarget(raw, index + 1));
   requireUnique(foods, (food) => food.id, "food");
@@ -773,6 +861,7 @@ export function validateImport(data) {
   requireUnique(targets, (target) => target.effectiveDate, "calorie target");
   requireUnique(weights, (weight) => weight.dateKey, "weigh-in");
   const result = { foods, entries, targets, weights };
+  if (categories) result.categories = categories;
   if (Object.hasOwn(data, "distribution")) {
     const distribution = normalizeDistribution(data.distribution);
     if (!distribution) fail("The meal distribution is invalid.");
@@ -797,6 +886,7 @@ export function replaceAll(data) {
     for (const target of data.targets) targets.put(target);
     for (const weight of data.weights) weights.put(weight);
     return finish(tx).then(() => {
+      saveCategories(data.categories || defaultCategories());
       if (data.distribution) saveDistribution(data.distribution);
     });
   });
@@ -1005,6 +1095,94 @@ function selfCheckPace() {
   );
 }
 
+function selfCheckCategories() {
+  const defaults = defaultCategories();
+  assertImport(defaults.map((category) => category.id).join(",") === "drink,snack,breakfast,lunch,dinner", "default categories");
+  assertImport(normalizeCategories(defaults).length === 5, "defaults normalize");
+  assertImport(normalizeCategories([]) === null, "empty categories");
+  assertImport(normalizeCategories([{ id: "a", label: "  " }]) === null, "blank category");
+  assertImport(
+    normalizeCategories([
+      { id: "a", label: "Drink" },
+      { id: "b", label: "drink" },
+    ]) === null,
+    "duplicate category",
+  );
+  assertImport(normalizeCategories([{ id: "uncategorized", label: "Other" }]) === null, "reserved id");
+  assertImport(normalizeCategories([{ id: "a", label: "Uncategorized" }]) === null, "reserved label");
+  assertImport(normalizeCategories([{ id: "a", label: "x".repeat(CATEGORY_NAME_MAX + 1) }]) === null, "category name cap");
+  const trimmed = normalizeCategories([{ id: " dessert ", label: " Dessert " }]);
+  assertImport(trimmed[0].id === "dessert" && trimmed[0].label === "Dessert", "category trim");
+
+  const foods = [
+    { id: "1", category: "snack", name: "A" },
+    { id: "2", category: "drink", name: "B" },
+  ];
+  const moved = reassignFoods(foods, "snack", "drink");
+  assertImport(moved[0].category === "drink" && moved[1] === foods[1], "reassign moves matches");
+  assertImport(foods[0].category === "snack", "reassign leaves the input alone");
+  const untouched = reassignFoods(foods, "missing", "drink");
+  assertImport(untouched[0] === foods[0] && untouched[1] === foods[1], "reassign ignores other foods");
+  assertImportFails(() => reassignFoods(foods, "snack", "snack"), "different category");
+
+  const bare = validateImport({
+    schemaVersion: 2,
+    foods: [{ id: "1", name: "Tea", calories: 1, createdAt: 1, updatedAt: 1 }],
+    entries: [],
+    targets: [],
+    weights: [],
+  });
+  assertImport(bare.foods[0].category == null && bare.categories == null, "food without a category");
+  const withCustom = validateImport({
+    schemaVersion: 2,
+    foods: [{ id: "1", name: "Cake", calories: 1, category: "dessert", createdAt: 1, updatedAt: 1 }],
+    entries: [],
+    targets: [],
+    weights: [],
+    categories: [{ id: "dessert", label: "Dessert" }],
+  });
+  assertImport(withCustom.categories[0].id === "dessert" && withCustom.foods[0].category === "dessert", "import categories");
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [{ id: "1", name: "Tea", calories: 1, category: "dessert", createdAt: 1, updatedAt: 1 }],
+        entries: [],
+        targets: [],
+        weights: [],
+      }),
+    "invalid category",
+  );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [{ id: "1", name: "Tea", calories: 1, category: "drink", createdAt: 1, updatedAt: 1 }],
+        entries: [],
+        targets: [],
+        weights: [],
+        categories: [{ id: "dessert", label: "Dessert" }],
+      }),
+    "invalid category",
+  );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [],
+        categories: [
+          { id: "a", label: "Drink" },
+          { id: "b", label: "drink" },
+        ],
+      }),
+    "categories",
+  );
+}
+
 selfCheckImport();
 selfCheckServing();
 selfCheckPace();
+selfCheckCategories();

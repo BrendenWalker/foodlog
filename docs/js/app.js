@@ -2,17 +2,19 @@ import { dateFromKey, groupEntriesByDay, targetFor, targetRecordFor, todayKey } 
 import {
   ACTIVITY_LEVELS,
   BODY_LIMITS,
-  FOOD_CATEGORIES,
+  CATEGORY_NAME_MAX,
   LOSS_RATES,
   activityFactor,
   addEntry,
   calorieFloor,
   dailyTargetCalories,
+  defaultCategories,
   deleteEntry,
   deleteFood,
   deleteWeight,
   ensureDefaultTarget,
   exportAll,
+  loadCategories,
   loadDistribution,
   loadMealDraft,
   emptyMealDraft,
@@ -29,6 +31,7 @@ import {
   getEntriesByDate,
   getRecentFoods,
   getTargets,
+  moveFoodsToCategory,
   paceCap,
   paceKcal,
   windowLeft,
@@ -37,6 +40,7 @@ import {
   putEntry,
   replaceAll,
   SERVING_MAX,
+  saveCategories,
   saveDistribution,
   saveFood,
   saveWeight,
@@ -48,11 +52,6 @@ import {
 } from "./db.js";
 import { trendSeries, weeklyRate } from "./weight.js";
 
-const CATEGORIES = FOOD_CATEGORIES.map((id) => ({
-  id,
-  label: id.charAt(0).toUpperCase() + id.slice(1),
-}));
-
 const TITLES = {
   today: "Today",
   meal: "Meal",
@@ -60,6 +59,7 @@ const TITLES = {
   weight: "Weight",
   library: "Library",
   settings: "Settings",
+  categories: "Categories",
   select: "Add from Library",
   calories: "Calories",
   distribution: "Distribution",
@@ -73,11 +73,16 @@ const PARENT = {
   serve: "select",
   calories: "settings",
   distribution: "settings",
+  categories: "settings",
   import: "settings",
 };
 
 let view = "today";
 let foods = [];
+let categories = defaultCategories();
+let editingCategoryId = null;
+let deletingCategoryId = null;
+let categoryMovePending = false;
 let editingId = null;
 let selectedDateKey = null;
 let undoEntry = null;
@@ -297,8 +302,8 @@ function recentRow(food) {
   return li;
 }
 
-function groupFoods(items) {
-  const buckets = new Map(CATEGORIES.map((category) => [category.id, []]));
+function groupFoods(items, list = categories) {
+  const buckets = new Map(list.map((category) => [category.id, []]));
   const uncategorized = [];
   for (const food of items) {
     const bucket = buckets.get(food.category);
@@ -306,7 +311,7 @@ function groupFoods(items) {
     else uncategorized.push(food);
   }
   const groups = [];
-  for (const category of CATEGORIES) {
+  for (const category of list) {
     const foodsInGroup = buckets.get(category.id);
     if (foodsInGroup.length === 0) continue;
     groups.push({ id: category.id, label: category.label, foods: foodsInGroup });
@@ -322,11 +327,14 @@ function assertServingLabel() {
 }
 
 function assertCategoryOrder() {
-  const ids = groupFoods([
-    { name: "Z", category: "dinner" },
-    { name: "A", category: "drink" },
-    { name: "M", category: null },
-  ])
+  const ids = groupFoods(
+    [
+      { name: "Z", category: "dinner" },
+      { name: "A", category: "drink" },
+      { name: "M", category: null },
+    ],
+    defaultCategories(),
+  )
     .map((group) => group.id)
     .join(",");
   if (ids !== "drink,dinner,uncategorized") throw new Error("category grouping");
@@ -629,6 +637,7 @@ async function refresh() {
     renderSelectList();
   } else if (view === "calories") await renderSettings();
   else if (view === "distribution") renderDistribution();
+  else if (view === "categories") await renderCategories();
 }
 
 function formatPounds(value) {
@@ -951,7 +960,8 @@ function openFoodForm(food) {
   $("food-name").value = food ? food.name : "";
   $("food-serving").value = food ? servingText(food) : "";
   $("food-calories").value = food ? String(food.calories) : "";
-  $("food-category").value = food && CATEGORIES.some((category) => category.id === food.category) ? food.category : "";
+  fillCategorySelect();
+  $("food-category").value = food && categories.some((category) => category.id === food.category) ? food.category : "";
   setError("food-name-error", "");
   setError("food-serving-error", "");
   setError("food-cal-error", "");
@@ -970,7 +980,7 @@ async function onSaveFood(event) {
   const nameOk = name.length > 0;
   const servingOk = serving.length <= SERVING_MAX;
   const caloriesOk = calories != null;
-  const categoryOk = CATEGORIES.some((item) => item.id === category);
+  const categoryOk = categories.some((item) => item.id === category);
   setError("food-name-error", nameOk ? "" : "Name is required.");
   setError("food-serving-error", servingOk ? "" : `Serving size must be ${SERVING_MAX} characters or less.`);
   setError("food-cal-error", caloriesOk ? "" : "Calories must be a positive whole number.");
@@ -1124,11 +1134,13 @@ async function onImportFile(event) {
     return;
   }
   const scope = clean.distribution
-    ? "foods, entries, targets, weigh-ins, and meal distribution"
-    : "foods, entries, targets, and weigh-ins";
+    ? "foods, entries, targets, weigh-ins, categories, and meal distribution"
+    : "foods, entries, targets, weigh-ins, and categories";
   if (!confirm(`Replace all current ${scope} with this backup?`)) return;
   try {
     await replaceAll(clean);
+    categories = loadCategories();
+    fillCategorySelect();
     const targets = await ensureDefaultTarget(todayKey());
     settingsTarget = targetRecordFor(todayKey(), targets);
     settingsTried = false;
@@ -1145,6 +1157,11 @@ async function onImportFile(event) {
 async function onTab(name) {
   if (name === "settings") setSettingsMsg("");
   if (name === "weight" && view !== "weight") $("weight-date").value = todayKey();
+  if (name === "categories") {
+    resetCategoryForm();
+    hideCategoryMove();
+    setError("category-error", "");
+  }
   show(name);
   await refresh();
 }
@@ -1157,11 +1174,198 @@ function onBack() {
 function fillCategorySelect() {
   const select = $("food-category");
   const filter = $("select-category");
-  for (const category of CATEGORIES) {
+  const selectedFood = select.value;
+  const selectedFilter = filter.value;
+  const foodBlank = el("option", "", "");
+  foodBlank.value = "";
+  const filterAll = el("option", "", "- All -");
+  filterAll.value = "";
+  select.replaceChildren(foodBlank);
+  filter.replaceChildren(filterAll);
+  for (const category of categories) {
     const option = el("option", "", category.label);
     option.value = category.id;
     select.append(option);
     filter.append(option.cloneNode(true));
+  }
+  select.value = categories.some((category) => category.id === selectedFood) ? selectedFood : "";
+  filter.value = categories.some((category) => category.id === selectedFilter) ? selectedFilter : "";
+}
+
+function categoryLabelError(label, ignoreId) {
+  if (label === "") return "Name is required.";
+  if (label.length > CATEGORY_NAME_MAX) return `Name must be ${CATEGORY_NAME_MAX} characters or less.`;
+  if (label.toLowerCase() === "uncategorized") return "That name is reserved.";
+  const taken = categories.some(
+    (category) => category.id !== ignoreId && category.label.toLowerCase() === label.toLowerCase(),
+  );
+  if (taken) return "That category already exists.";
+  return "";
+}
+
+function resetCategoryForm() {
+  editingCategoryId = null;
+  $("category-name").value = "";
+  $("category-save").textContent = "Add";
+  $("category-cancel").hidden = true;
+  setError("category-name-error", "");
+}
+
+function hideCategoryMove() {
+  deletingCategoryId = null;
+  $("category-move").hidden = true;
+  setError("category-move-error", "");
+}
+
+function renderCategoryList() {
+  const nodes = categories.map((category) => {
+    const count = foods.filter((food) => food.category === category.id).length;
+    const li = el("li", "row");
+    const main = el("button", "row-main category-edit");
+    main.type = "button";
+    main.append(
+      el("div", "row-name", category.label),
+      el("div", "row-meta", count === 1 ? "1 food" : `${count} foods`),
+    );
+    main.addEventListener("click", () => beginCategoryEdit(category));
+    const remove = el("button", "remove-btn", "Delete");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Delete ${category.label}`);
+    remove.addEventListener("click", () => beginCategoryDelete(category));
+    li.append(main, remove);
+    return li;
+  });
+  $("category-list").replaceChildren(...nodes);
+}
+
+async function renderCategories() {
+  categories = loadCategories();
+  await loadFoods();
+  fillCategorySelect();
+  renderCategoryList();
+}
+
+function beginCategoryEdit(category) {
+  if (categoryMovePending) return;
+  hideCategoryMove();
+  editingCategoryId = category.id;
+  $("category-name").value = category.label;
+  $("category-save").textContent = "Save";
+  $("category-cancel").hidden = false;
+  setError("category-name-error", "");
+  setError("category-error", "");
+  $("category-name").focus();
+  $("category-name").select();
+}
+
+function deleteEmptyCategory(id) {
+  try {
+    categories = saveCategories(categories.filter((category) => category.id !== id));
+  } catch (error) {
+    console.error(error);
+    setError("category-error", "Could not delete that category.");
+    return;
+  }
+  if (editingCategoryId === id) resetCategoryForm();
+  hideCategoryMove();
+  setError("category-error", "");
+  fillCategorySelect();
+  renderCategoryList();
+}
+
+function beginCategoryDelete(category) {
+  if (categoryMovePending) return;
+  setError("category-error", "");
+  if (categories.length < 2) {
+    setError("category-error", "Keep at least one category.");
+    return;
+  }
+  const count = foods.filter((food) => food.category === category.id).length;
+  if (count === 0) {
+    if (!confirm(`Delete ${category.label}?`)) return;
+    deleteEmptyCategory(category.id);
+    return;
+  }
+  resetCategoryForm();
+  deletingCategoryId = category.id;
+  const select = $("category-move-select");
+  select.replaceChildren();
+  for (const other of categories) {
+    if (other.id === category.id) continue;
+    const option = el("option", "", other.label);
+    option.value = other.id;
+    select.append(option);
+  }
+  $("category-move-count").textContent =
+    count === 1 ? `1 food uses ${category.label}.` : `${count} foods use ${category.label}.`;
+  $("category-move").hidden = false;
+  setError("category-move-error", "");
+  $("category-move").scrollIntoView({ block: "nearest" });
+  select.focus();
+}
+
+function onSaveCategory(event) {
+  event.preventDefault();
+  if (categoryMovePending) return;
+  const label = $("category-name").value.trim();
+  const message = categoryLabelError(label, editingCategoryId);
+  setError("category-name-error", message);
+  if (message) return;
+  const next = editingCategoryId
+    ? categories.map((category) => (category.id === editingCategoryId ? { id: category.id, label } : category))
+    : [...categories, { id: crypto.randomUUID(), label }];
+  try {
+    categories = saveCategories(next);
+  } catch (error) {
+    console.error(error);
+    setError("category-name-error", "Could not save that category.");
+    return;
+  }
+  resetCategoryForm();
+  setError("category-error", "");
+  fillCategorySelect();
+  renderCategoryList();
+}
+
+async function onCategoryMoveDelete() {
+  if (categoryMovePending || !deletingCategoryId) return;
+  const fromId = deletingCategoryId;
+  const toId = $("category-move-select").value;
+  const others = categories.filter((category) => category.id !== fromId);
+  if (!others.some((category) => category.id === toId)) {
+    setError("category-move-error", "Pick a category.");
+    return;
+  }
+  categoryMovePending = true;
+  $("category-move-delete").disabled = true;
+  try {
+    try {
+      await moveFoodsToCategory(fromId, toId);
+    } catch (error) {
+      console.error(error);
+      setError("category-move-error", "Could not move those foods. Nothing was changed.");
+      return;
+    }
+    try {
+      categories = saveCategories(others);
+    } catch (error) {
+      console.error(error);
+      await loadFoods();
+      hideCategoryMove();
+      fillCategorySelect();
+      renderCategoryList();
+      setError("category-error", "Foods were moved. Delete the category to finish.");
+      return;
+    }
+    await loadFoods();
+    hideCategoryMove();
+    resetCategoryForm();
+    setError("category-error", "");
+    fillCategorySelect();
+    renderCategoryList();
+  } finally {
+    categoryMovePending = false;
+    $("category-move-delete").disabled = false;
   }
 }
 
@@ -1427,6 +1631,15 @@ function bind() {
   $("distribution-form").addEventListener("submit", onSaveDistribution);
   $("distribution-form").addEventListener("input", onDistributionInput);
   $("distribution-form").addEventListener("change", onDistributionInput);
+  $("category-form").addEventListener("submit", onSaveCategory);
+  $("category-cancel").addEventListener("click", resetCategoryForm);
+  $("category-move-delete").addEventListener("click", onCategoryMoveDelete);
+  $("category-move-cancel").addEventListener("click", hideCategoryMove);
+  $("category-name").maxLength = CATEGORY_NAME_MAX;
+  $("category-name").addEventListener("input", () => {
+    setError("category-name-error", "");
+    setError("category-error", "");
+  });
   $("weight-form").addEventListener("submit", onSaveWeight);
   $("weight-date").addEventListener("change", onWeightDateChange);
   $("delete-weight").addEventListener("click", onDeleteWeight);
@@ -1458,6 +1671,7 @@ function bind() {
 }
 
 async function init() {
+  categories = loadCategories();
   assertCategoryOrder();
   assertSelectFilter();
   assertServingLabel();

@@ -184,6 +184,7 @@
         <ul class="rows">
           <li><button type="button" class="row" data-open="calories">Calories</button></li>
           <li><button type="button" class="row" data-open="distribution">Distribution</button></li>
+          <li><button type="button" class="row" data-open="categories">Categories</button></li>
           <li><button type="button" class="row" data-open="import">Import/Export</button></li>
         </ul>
       </section>
@@ -265,6 +266,26 @@
           <button type="submit" class="wide">Save</button>
           <p id="distribution-saved" class="hint" role="status" hidden></p>
         </form>
+      </section>
+
+      <section id="view-categories" data-view="categories" hidden>
+        <form id="category-form">
+          <label for="category-name">Name</label>
+          <input id="category-name" autocomplete="off" enterkeyhint="done" />
+          <p id="category-name-error" class="error" hidden></p>
+          <button type="submit" id="category-save" class="wide">Add</button>
+          <button type="button" id="category-cancel" class="wide secondary" hidden>Cancel</button>
+        </form>
+        <ul id="category-list" class="rows"></ul>
+        <p id="category-error" class="error" hidden></p>
+        <div id="category-move" hidden>
+          <p id="category-move-count"></p>
+          <label for="category-move-select">Move foods to</label>
+          <select id="category-move-select"></select>
+          <p id="category-move-error" class="error" hidden></p>
+          <button type="button" id="category-move-delete" class="wide danger">Delete</button>
+          <button type="button" id="category-move-cancel" class="wide secondary">Cancel</button>
+        </div>
       </section>
 
       <section id="view-import" data-view="import" hidden>
