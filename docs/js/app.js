@@ -86,6 +86,8 @@ let settingsTarget = null;
 let settingsTried = false;
 let servingFood = null;
 let mealDraft = null;
+let mealLibraryKey = "";
+let mealLibrarySaving = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -1157,11 +1159,13 @@ function onBack() {
 function fillCategorySelect() {
   const select = $("food-category");
   const filter = $("select-category");
+  const meal = $("meal-category");
   for (const category of CATEGORIES) {
     const option = el("option", "", category.label);
     option.value = category.id;
     select.append(option);
     filter.append(option.cloneNode(true));
+    meal.append(option.cloneNode(true));
   }
 }
 
@@ -1232,6 +1236,11 @@ function persistMeal() {
   }
 }
 
+function clearMealSaved() {
+  mealLibraryKey = "";
+  setError("meal-saved", "");
+}
+
 function paintMealTotal() {
   let calories = 0;
   let grams = 0;
@@ -1270,6 +1279,19 @@ function mealProblem() {
   return "";
 }
 
+function mealPayload() {
+  const problem = mealProblem();
+  if (problem) return { error: problem };
+  let calories = 0;
+  let grams = 0;
+  for (const line of mealDraft.lines) {
+    const portion = portionOf(line);
+    calories += portion.calories;
+    grams += portion.grams;
+  }
+  return { name: mealDraft.name.trim(), calories, grams };
+}
+
 function renderMealLines() {
   const nodes = mealDraft.lines.map((line, index) => {
     const food = mealFood(line.foodId);
@@ -1298,6 +1320,7 @@ function renderMealLines() {
       if (input.value !== digits) input.value = digits;
       mealDraft.lines[index].grams = digits;
       setError("meal-error", "");
+      clearMealSaved();
       persistMeal();
       const next = portionOf(mealDraft.lines[index]);
       kcal.textContent = next.calories == null ? "" : `${formatNum(next.calories)} kcal`;
@@ -1309,6 +1332,7 @@ function renderMealLines() {
       mealDraft.lines.splice(index, 1);
       syncMealName();
       setError("meal-error", "");
+      clearMealSaved();
       persistMeal();
       renderMealLines();
       paintMealTotal();
@@ -1344,6 +1368,7 @@ function addMealLine(food) {
   syncMealName();
   $("meal-search").value = "";
   setError("meal-error", "");
+  clearMealSaved();
   persistMeal();
   renderMealSearch();
   renderMealLines();
@@ -1359,6 +1384,16 @@ function onMealName() {
   mealDraft.name = input.value;
   mealDraft.nameEdited = true;
   setError("meal-error", "");
+  clearMealSaved();
+  persistMeal();
+}
+
+function onMealCategory() {
+  ensureMealDraft();
+  const value = $("meal-category").value;
+  mealDraft.category = CATEGORIES.some((item) => item.id === value) ? value : "";
+  setError("meal-category-error", "");
+  clearMealSaved();
   persistMeal();
 }
 
@@ -1368,7 +1403,10 @@ async function renderMeal() {
   syncMealName();
   const nameInput = $("meal-name");
   if (document.activeElement !== nameInput) nameInput.value = mealDraft.name;
+  const categoryInput = $("meal-category");
+  if (document.activeElement !== categoryInput) categoryInput.value = mealDraft.category;
   setError("meal-error", "");
+  setError("meal-category-error", "");
   renderMealSearch();
   renderMealLines();
   paintMealTotal();
@@ -1377,22 +1415,14 @@ async function renderMeal() {
 async function onMealAdd() {
   ensureMealDraft();
   syncMealName();
-  const problem = mealProblem();
-  if (problem) {
-    setError("meal-error", problem);
+  const meal = mealPayload();
+  if (meal.error) {
+    setError("meal-error", meal.error);
     return;
-  }
-  const name = mealDraft.name.trim();
-  let calories = 0;
-  let grams = 0;
-  for (const line of mealDraft.lines) {
-    const portion = portionOf(line);
-    calories += portion.calories;
-    grams += portion.grams;
   }
   setError("meal-error", "");
   try {
-    await addEntry({ name, calories, serving: `${grams} g` });
+    await addEntry({ name: meal.name, calories: meal.calories, serving: `${meal.grams} g` });
   } catch (error) {
     console.error(error);
     setError("meal-error", "Could not save that entry.");
@@ -1405,9 +1435,46 @@ async function onMealAdd() {
     console.error(error);
   }
   $("meal-name").value = "";
+  $("meal-category").value = "";
   $("meal-search").value = "";
+  setError("meal-category-error", "");
+  clearMealSaved();
   show("today");
   await renderToday();
+}
+
+async function onMealLibrary() {
+  if (mealLibrarySaving) return;
+  ensureMealDraft();
+  syncMealName();
+  const meal = mealPayload();
+  const category = $("meal-category").value;
+  const categoryOk = CATEGORIES.some((item) => item.id === category);
+  setError("meal-error", meal.error || "");
+  setError("meal-category-error", categoryOk ? "" : "Category is required.");
+  if (meal.error || !categoryOk) return;
+  const key = `${category}\n${meal.name}\n${meal.calories}\n${meal.grams}`;
+  const label = CATEGORIES.find((item) => item.id === category).label;
+  if (key === mealLibraryKey) {
+    setError("meal-saved", `Saved to Library as ${label}.`);
+    return;
+  }
+  mealLibrarySaving = true;
+  try {
+    await saveFood({ name: meal.name, calories: meal.calories, category, serving: `${meal.grams} g` });
+    mealLibraryKey = key;
+    setError("meal-saved", `Saved to Library as ${label}.`);
+    try {
+      await loadFoods();
+    } catch (error) {
+      console.error(error);
+    }
+  } catch (error) {
+    console.error(error);
+    setError("meal-error", "Could not save that meal to the library.");
+  } finally {
+    mealLibrarySaving = false;
+  }
 }
 
 function bind() {
@@ -1438,8 +1505,10 @@ function bind() {
   $("select-category").addEventListener("change", renderSelectList);
   $("meal-form").addEventListener("submit", (event) => event.preventDefault());
   $("meal-add").addEventListener("click", onMealAdd);
+  $("meal-library").addEventListener("click", onMealLibrary);
   $("meal-name").maxLength = MEAL_NAME_MAX;
   $("meal-name").addEventListener("input", onMealName);
+  $("meal-category").addEventListener("change", onMealCategory);
   $("meal-search").addEventListener("input", () => {
     setError("meal-error", "");
     renderMealSearch();

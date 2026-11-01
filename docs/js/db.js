@@ -259,13 +259,14 @@ export const MEAL_NAME_MAX = 120;
 export const MEAL_LINES_MAX = 20;
 
 export function emptyMealDraft() {
-  return { name: "", nameEdited: false, lines: [] };
+  return { name: "", nameEdited: false, category: "", lines: [] };
 }
 
 export function normalizeMealDraft(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return emptyMealDraft();
   const name = typeof raw.name === "string" ? raw.name.slice(0, MEAL_NAME_MAX) : "";
   const nameEdited = raw.nameEdited === true;
+  const category = FOOD_CATEGORY_SET.has(raw.category) ? raw.category : "";
   const lines = [];
   if (Array.isArray(raw.lines)) {
     for (const line of raw.lines) {
@@ -276,7 +277,7 @@ export function normalizeMealDraft(raw) {
       lines.push({ foodId: line.foodId, grams: line.grams });
     }
   }
-  return { name, nameEdited, lines };
+  return { name, nameEdited, category, lines };
 }
 
 export function loadMealDraft() {
@@ -293,7 +294,7 @@ export function loadMealDraft() {
 export function saveMealDraft(draft) {
   const clean = normalizeMealDraft(draft);
   if (typeof localStorage === "undefined") return clean;
-  if (clean.lines.length === 0 && clean.name.trim() === "") {
+  if (clean.lines.length === 0 && clean.name.trim() === "" && clean.category === "") {
     localStorage.removeItem(MEAL_DRAFT_KEY);
     return clean;
   }
@@ -919,8 +920,12 @@ function selfCheckServing() {
   assertImport(draft.name.length === MEAL_NAME_MAX && draft.nameEdited === true, "draft name cap");
   assertImport(draft.lines[0].foodId === "rice" && draft.lines[0].grams === "180", "draft keeps a weighed line");
   assertImport(draft.lines.length === MEAL_LINES_MAX, "draft line cap");
+  assertImport(draft.category === "", "draft drops a missing category");
   assertImport(normalizeMealDraft(null).lines.length === 0, "missing draft");
   assertImport(normalizeMealDraft({ nameEdited: "yes", lines: [{ foodId: 4, grams: "1" }] }).nameEdited === false, "draft rejects junk");
+  assertImport(normalizeMealDraft({ category: "lunch" }).category === "lunch", "draft keeps a category");
+  assertImport(normalizeMealDraft({ category: "brunch" }).category === "", "draft rejects a bad category");
+  assertImport(emptyMealDraft().category === "", "empty draft category");
 
   const now = Date.UTC(2026, 9, 17);
   const foods = [

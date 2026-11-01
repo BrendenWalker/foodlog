@@ -509,7 +509,8 @@ legend {
 }
 
 #meal-name,
-#meal-search {
+#meal-search,
+#meal-category {
   width: 100%;
 }
 
