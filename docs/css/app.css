@@ -223,6 +223,15 @@ h2 {
   min-width: 0;
 }
 
+button.category-edit {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
 .row-name,
 .food-name,
 .entry-name,
@@ -312,7 +321,9 @@ select {
 #weight-form input,
 #target-form input:not([type="radio"]),
 #target-form select,
-#distribution-form input {
+#distribution-form input,
+#category-form input,
+#category-move select {
   width: 100%;
 }
 
