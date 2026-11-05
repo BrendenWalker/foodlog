@@ -64,15 +64,24 @@ button {
   outline-offset: 2px;
 }
 
+.app-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
 .topbar {
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 52px;
   padding: 8px 16px;
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  background: var(--bg);
+}
+
+.status {
+  padding: 0 16px 10px;
   background: var(--bg);
 }
 

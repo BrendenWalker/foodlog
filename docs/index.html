@@ -15,33 +15,35 @@
     <link rel="stylesheet" href="css/app.css" />
   </head>
   <body>
-    <header class="topbar">
-      <button type="button" id="back-btn" class="back-btn" hidden>Back</button>
-      <h1 id="screen-title">Today</h1>
-      <span class="app-version">v1.2.0</span>
-    </header>
+    <div class="app-chrome">
+      <header class="topbar">
+        <button type="button" id="back-btn" class="back-btn" hidden>Back</button>
+        <h1 id="screen-title">Today</h1>
+        <span class="app-version">v1.2.0</span>
+      </header>
+      <div class="status" id="day-status">
+        <p class="status-main" id="status-main">0 / 2,000 kcal</p>
+        <p class="status-sub" id="status-sub" aria-live="polite">2,000 kcal remaining</p>
+        <div class="bar-wrap">
+          <div
+            class="bar"
+            id="status-bar"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="2000"
+            aria-valuenow="0"
+            aria-label="Calories consumed today"
+          >
+            <div class="bar-fill" id="status-fill"></div>
+          </div>
+          <span class="bar-mark" id="status-mark-breakfast" hidden aria-hidden="true"></span>
+          <span class="bar-mark" id="status-mark-lunch" hidden aria-hidden="true"></span>
+        </div>
+      </div>
+    </div>
 
     <main id="main">
       <section id="view-today" data-view="today">
-        <div class="status">
-          <p class="status-main" id="status-main">0 / 2,000 kcal</p>
-          <p class="status-sub" id="status-sub" aria-live="polite">2,000 kcal remaining</p>
-          <div class="bar-wrap">
-            <div
-              class="bar"
-              id="status-bar"
-              role="progressbar"
-              aria-valuemin="0"
-              aria-valuemax="2000"
-              aria-valuenow="0"
-              aria-label="Calories consumed today"
-            >
-              <div class="bar-fill" id="status-fill"></div>
-            </div>
-            <span class="bar-mark" id="status-mark-breakfast" hidden aria-hidden="true"></span>
-            <span class="bar-mark" id="status-mark-lunch" hidden aria-hidden="true"></span>
-          </div>
-        </div>
         <p id="today-error" class="error" hidden></p>
 
         <h2>Quick add</h2>

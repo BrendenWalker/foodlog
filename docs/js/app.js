@@ -77,6 +77,8 @@ const PARENT = {
   import: "settings",
 };
 
+const STATUS_VIEWS = new Set(["today", "meal", "select", "serve"]);
+
 let view = "today";
 let foods = [];
 let categories = defaultCategories();
@@ -172,6 +174,7 @@ function show(name, title) {
   }
   $("screen-title").textContent = title || TITLES[name] || "Calories";
   $("back-btn").hidden = !(name in PARENT);
+  $("day-status").hidden = !STATUS_VIEWS.has(name);
 }
 
 function currentMinutes(now = new Date()) {
@@ -269,6 +272,13 @@ function paintStatus(consumed, target, distribution, minutes) {
   bar.setAttribute("aria-valuemax", String(target));
   bar.setAttribute("aria-valuenow", String(consumed));
   bar.setAttribute("aria-valuetext", sub.textContent);
+}
+
+async function refreshStatus() {
+  const dateKey = todayKey();
+  const [entries, targets] = await Promise.all([getEntriesByDate(dateKey), getTargets()]);
+  const consumed = entries.reduce((sum, entry) => sum + entry.calories, 0);
+  paintStatus(consumed, targetFor(dateKey, targets), loadDistribution(), currentMinutes());
 }
 
 function kcalLabel(item) {
@@ -632,12 +642,16 @@ async function refresh() {
   else if (view === "history") await renderHistory();
   else if (view === "day") await renderDay();
   else if (view === "weight") await renderWeight();
-  else if (view === "meal") await renderMeal();
-  else if (view === "library") await renderLibrary();
+  else if (view === "meal") {
+    await renderMeal();
+    await refreshStatus();
+  } else if (view === "library") await renderLibrary();
   else if (view === "select") {
     await loadFoods();
     renderSelectList();
-  } else if (view === "calories") await renderSettings();
+    await refreshStatus();
+  } else if (view === "serve") await refreshStatus();
+  else if (view === "calories") await renderSettings();
   else if (view === "distribution") renderDistribution();
   else if (view === "categories") await renderCategories();
 }
@@ -949,6 +963,7 @@ async function openSelect() {
   $("select-category").value = "";
   show("select");
   renderSelectList();
+  await refreshStatus();
 }
 
 async function openDay(dateKey) {
