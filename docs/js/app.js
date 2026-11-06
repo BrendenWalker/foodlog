@@ -336,6 +336,9 @@ function assertServingLabel() {
   if (kcalLabel({ calories: 100 }) !== "100 kcal") throw new Error("serving label");
   if (kcalLabel({ calories: 100, serving: "1 cup" }) !== "(1 cup) 100 kcal") throw new Error("serving label");
   if (kcalLabel({ calories: 100, grams: 30 }) !== "(30 g) 100 kcal") throw new Error("serving label");
+  if (defaultMealGrams({ serving: "40 g" }) !== "40") throw new Error("meal grams prefill");
+  if (defaultMealGrams({ serving: "40.5 g" }) !== "41") throw new Error("meal grams round");
+  if (defaultMealGrams({ serving: "1 cup" }) !== "") throw new Error("meal grams cup");
 }
 
 function assertCategoryOrder() {
@@ -1605,13 +1608,21 @@ function renderMealSearch() {
   setList("meal-results", "meal-results-empty", nodes, emptyText);
 }
 
+function defaultMealGrams(food) {
+  const grams = gramsInServing(servingText(food));
+  if (grams == null) return "";
+  const whole = Math.round(grams);
+  if (whole < 1 || whole > GRAM_MAX) return "";
+  return String(whole);
+}
+
 function addMealLine(food) {
   ensureMealDraft();
   if (mealDraft.lines.length >= MEAL_LINES_MAX) {
     setError("meal-error", `A meal can include ${MEAL_LINES_MAX} foods.`);
     return;
   }
-  mealDraft.lines.push({ foodId: food.id, grams: "" });
+  mealDraft.lines.push({ foodId: food.id, grams: defaultMealGrams(food) });
   syncMealName();
   $("meal-search").value = "";
   setError("meal-error", "");
@@ -1621,7 +1632,10 @@ function addMealLine(food) {
   renderMealLines();
   paintMealTotal();
   const input = $("meal-lines").querySelector("li:last-child input");
-  if (input) input.focus();
+  if (input) {
+    input.focus();
+    input.select();
+  }
 }
 
 function onMealName() {
