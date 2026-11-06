@@ -47,6 +47,16 @@ export function weeklyRate(series, windowDays) {
   return ((start.trend - end.trend) / days) * 7;
 }
 
+// Trend delta from first weigh-in to latest. Positive loss means pounds down.
+export function totalLoss(series) {
+  if (series.length < 2) return null;
+  const first = series[0];
+  const last = series[series.length - 1];
+  const days = calendarDaysBetween(first.dateKey, last.dateKey);
+  if (days <= 0) return null;
+  return { loss: first.trend - last.trend, days };
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(`weight: ${message}`);
 }
@@ -95,6 +105,11 @@ function selfCheck() {
   ]);
   assertClose(weeklyRate(picked, 7), 1.9, "uses the latest weigh-in on or before the window");
   assert(weeklyRate(trendSeries([{ dateKey: "2026-10-08", pounds: 200 }]), 7) === null, "one weigh-in has no rate");
+
+  const overall = totalLoss(series);
+  assertClose(overall.loss, 0.29, "total trend loss since first weigh-in");
+  assert(overall.days === 2, "total span is calendar days");
+  assert(totalLoss(trendSeries([{ dateKey: "2026-10-08", pounds: 200 }])) === null, "one weigh-in has no total");
 }
 
 selfCheck();

@@ -562,6 +562,10 @@ legend {
   margin: 2px 0 0;
 }
 
+#weight-total {
+  margin: 6px 0 0;
+}
+
 .weight-chart {
   display: block;
   width: 100%;

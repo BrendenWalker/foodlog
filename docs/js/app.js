@@ -50,7 +50,7 @@ import {
   validProfile,
   validateImport,
 } from "./db.js";
-import { trendSeries, weeklyRate } from "./weight.js";
+import { totalLoss, trendSeries, weeklyRate } from "./weight.js";
 
 const TITLES = {
   today: "Today",
@@ -661,14 +661,24 @@ function formatPounds(value) {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-// weeklyRate is pounds lost, so a loss is positive there. The page shows the
+// weeklyRate / totalLoss are pounds lost (positive = down). The page shows the
 // weight change instead: minus when the trend falls, plus when it rises.
+function formatChange(delta, unit) {
+  if (delta == null) return "—";
+  const shown = Math.round(-delta * 10) / 10;
+  if (shown === 0) return `0.0 ${unit}`;
+  const sign = shown > 0 ? "+" : "−";
+  return `${sign}${Math.abs(shown).toFixed(1)} ${unit}`;
+}
+
 function formatRate(rate) {
-  if (rate == null) return "—";
-  const delta = Math.round(-rate * 10) / 10;
-  if (delta === 0) return "0.0 lb/week";
-  const sign = delta > 0 ? "+" : "−";
-  return `${sign}${Math.abs(delta).toFixed(1)} lb/week`;
+  return formatChange(rate, "lb/week");
+}
+
+function formatTotal(total) {
+  if (total == null) return "—";
+  const dayLabel = total.days === 1 ? "day" : "days";
+  return `${formatChange(total.loss, "lb")} in ${total.days} ${dayLabel}`;
 }
 
 function applyWeightSelection(logs) {
@@ -789,6 +799,10 @@ async function renderWeight() {
   const series = trendSeries(logs);
   $("weight-week").textContent = formatRate(weeklyRate(series, 7));
   $("weight-month").textContent = formatRate(weeklyRate(series, 30));
+  const total = totalLoss(series);
+  const totalEl = $("weight-total");
+  totalEl.hidden = total == null;
+  totalEl.textContent = total == null ? "" : formatTotal(total);
   paintWeightChart(series);
   const newest = [...logs].sort((a, b) => (a.dateKey < b.dateKey ? 1 : a.dateKey > b.dateKey ? -1 : 0));
   const nodes = newest.map((row) => {
@@ -1404,6 +1418,9 @@ function assertRateSign() {
   if (formatRate(-0.4) !== "+0.4 lb/week") throw new Error("gain sign");
   if (formatRate(0) !== "0.0 lb/week") throw new Error("flat sign");
   if (formatRate(null) !== "—") throw new Error("empty rate");
+  if (formatTotal({ loss: 12.34, days: 45 }) !== "−12.3 lb in 45 days") throw new Error("total loss sign");
+  if (formatTotal({ loss: -0.4, days: 1 }) !== "+0.4 lb in 1 day") throw new Error("total gain sign");
+  if (formatTotal(null) !== "—") throw new Error("empty total");
 }
 
 function assertCalorieFormula() {
