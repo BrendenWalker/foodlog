@@ -1,8 +1,8 @@
 import { localDateKey, todayKey } from "./dates.js";
 
 const DB_NAME = "foodlog";
-const DB_VERSION = 2;
-export const SCHEMA_VERSION = 2;
+const DB_VERSION = 3;
+export const SCHEMA_VERSION = 3;
 export const CATEGORY_NAME_MAX = 40;
 const CATEGORY_ID_MAX = 80;
 const CATEGORIES_KEY = "foodlog.categories";
@@ -88,6 +88,11 @@ function openDb() {
         if (!db.objectStoreNames.contains("weights")) {
           db.createObjectStore("weights", { keyPath: "dateKey" });
         }
+        if (!db.objectStoreNames.contains("foodComponents")) {
+          const components = db.createObjectStore("foodComponents", { keyPath: "id" });
+          components.createIndex("foodId", "foodId");
+          components.createIndex("componentFoodId", "componentFoodId");
+        }
       };
       request.onsuccess = () => {
         const db = request.result;
@@ -132,6 +137,35 @@ function readAll(storeName) {
 
 export function getAllFoods() {
   return readAll("foods");
+}
+
+export function getAllFoodComponents() {
+  return readAll("foodComponents");
+}
+
+export function getComponentsByFoodId(foodId) {
+  return openDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction("foodComponents", "readonly");
+        const request = tx.objectStore("foodComponents").index("foodId").getAll(foodId);
+        request.onsuccess = () => {
+          const rows = request.result;
+          rows.sort((a, b) => a.sort - b.sort || String(a.id).localeCompare(String(b.id)));
+          resolve(rows);
+        };
+        request.onerror = () => reject(request.error);
+      }),
+  );
+}
+
+// Parents that have at least one component row.
+export function compositeFoodIds(components) {
+  const ids = new Set();
+  for (const row of components) {
+    if (row && typeof row.foodId === "string" && row.foodId !== "") ids.add(row.foodId);
+  }
+  return ids;
 }
 
 export function getTargets() {
@@ -368,15 +402,50 @@ export function clearMealDraft() {
   localStorage.removeItem(MEAL_DRAFT_KEY);
 }
 
-export function saveFood({ id, name, calories, category, serving = "" }) {
+function validateFoodFields({ name, calories, category, serving }) {
   const allowed = new Set(loadCategories().map((item) => item.id));
-  if (!allowed.has(category)) {
-    return Promise.reject(new Error("Category is required."));
-  }
+  if (!allowed.has(category)) throw new Error("Category is required.");
+  if (typeof name !== "string" || name.trim() === "") throw new Error("Name is required.");
+  if (!isPositiveInt(calories)) throw new Error("Calories must be a positive whole number.");
   if (typeof serving !== "string" || serving.trim().length > SERVING_MAX) {
-    return Promise.reject(new Error("Serving size must be 80 characters or less."));
+    throw new Error("Serving size must be 80 characters or less.");
   }
-  serving = serving.trim();
+  return { name: name.trim(), calories, category, serving: serving.trim() };
+}
+
+function normalizeComponentLines(components) {
+  if (!Array.isArray(components) || components.length === 0) {
+    throw new Error("A library meal needs at least one food.");
+  }
+  if (components.length > MEAL_LINES_MAX) {
+    throw new Error(`A meal can include ${MEAL_LINES_MAX} foods.`);
+  }
+  const lines = [];
+  for (let index = 0; index < components.length; index++) {
+    const raw = components[index];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Meal food ${index + 1} is invalid.`);
+    }
+    if (typeof raw.componentFoodId !== "string" || raw.componentFoodId.trim() === "" || raw.componentFoodId.length > 80) {
+      throw new Error(`Meal food ${index + 1} is invalid.`);
+    }
+    if (!isPositiveInt(raw.grams) || raw.grams > GRAM_MAX) {
+      throw new Error(`Meal food ${index + 1} has an invalid weight.`);
+    }
+    lines.push({ componentFoodId: raw.componentFoodId.trim(), grams: raw.grams, sort: index });
+  }
+  return lines;
+}
+
+export function saveFood({ id, name, calories, category, serving = "" }) {
+  let fields;
+  try {
+    fields = validateFoodFields({ name, calories, category, serving });
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  serving = fields.serving;
+  name = fields.name;
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
@@ -431,10 +500,156 @@ export function saveFood({ id, name, calories, category, serving = "" }) {
   );
 }
 
+// Parent food plus live component rows. Replaces that parent's components in one write.
+export function saveFoodWithComponents({ id, name, calories, category, serving = "", components }) {
+  let fields;
+  let lines;
+  try {
+    fields = validateFoodFields({ name, calories, category, serving });
+    lines = normalizeComponentLines(components);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return openDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(["foods", "foodComponents"], "readwrite");
+        const foods = tx.objectStore("foods");
+        const store = tx.objectStore("foodComponents");
+        const now = Date.now();
+        let food = null;
+        let settled = false;
+        const fail = (error) => {
+          if (settled) return;
+          settled = true;
+          try {
+            tx.abort();
+          } catch {
+            /* already failing */
+          }
+          reject(error);
+        };
+        const allComps = store.getAll();
+        allComps.onsuccess = () => {
+          const existing = allComps.result;
+          const parents = compositeFoodIds(existing);
+          if (id && existing.some((row) => row.componentFoodId === id)) {
+            fail(new Error("That food is used inside another meal."));
+            return;
+          }
+          for (const line of lines) {
+            if (id && line.componentFoodId === id) {
+              fail(new Error("A meal cannot include itself."));
+              return;
+            }
+            if (parents.has(line.componentFoodId)) {
+              fail(new Error("A meal cannot include another meal."));
+              return;
+            }
+          }
+          const foodIds = new Set(lines.map((line) => line.componentFoodId));
+          if (id) foodIds.add(id);
+          let pending = foodIds.size;
+          let missing = false;
+          const note = () => {
+            pending -= 1;
+            if (pending > 0 || missing) return;
+            writeParent();
+          };
+          for (const foodId of foodIds) {
+            const getRequest = foods.get(foodId);
+            getRequest.onsuccess = () => {
+              if (!getRequest.result && foodId !== id) {
+                missing = true;
+                fail(new Error("A meal food is no longer in the library."));
+                return;
+              }
+              if (id && foodId === id && !getRequest.result) {
+                missing = true;
+                fail(new Error("Food not found."));
+                return;
+              }
+              note();
+            };
+            getRequest.onerror = () => fail(getRequest.error);
+          }
+          function writeParent() {
+            if (settled) return;
+            if (!id) {
+              food = {
+                id: crypto.randomUUID(),
+                name: fields.name,
+                calories: fields.calories,
+                category: fields.category,
+                lastUsedAt: null,
+                createdAt: now,
+                updatedAt: now,
+              };
+              applyServing(food, fields.serving);
+              foods.put(food);
+              writeComponents(food.id);
+              return;
+            }
+            const getRequest = foods.get(id);
+            getRequest.onsuccess = () => {
+              const row = getRequest.result;
+              if (!row) {
+                fail(new Error("Food not found."));
+                return;
+              }
+              row.name = fields.name;
+              row.calories = fields.calories;
+              row.category = fields.category;
+              applyServing(row, fields.serving);
+              row.updatedAt = now;
+              food = row;
+              foods.put(row);
+              writeComponents(row.id);
+            };
+            getRequest.onerror = () => fail(getRequest.error);
+          }
+          function writeComponents(parentId) {
+            const byParent = store.index("foodId").getAll(parentId);
+            byParent.onsuccess = () => {
+              for (const row of byParent.result) store.delete(row.id);
+              for (const line of lines) {
+                store.put({
+                  id: crypto.randomUUID(),
+                  foodId: parentId,
+                  componentFoodId: line.componentFoodId,
+                  grams: line.grams,
+                  sort: line.sort,
+                });
+              }
+            };
+            byParent.onerror = () => fail(byParent.error);
+          }
+        };
+        allComps.onerror = () => fail(allComps.error);
+        tx.oncomplete = () => {
+          if (settled) return;
+          settled = true;
+          resolve(food);
+        };
+        tx.onerror = () => fail(tx.error);
+        tx.onabort = () => fail(tx.error || new Error("The save was aborted."));
+      }),
+  );
+}
+
 export function deleteFood(id) {
   return openDb().then((db) => {
-    const tx = db.transaction("foods", "readwrite");
+    const tx = db.transaction(["foods", "foodComponents"], "readwrite");
     tx.objectStore("foods").delete(id);
+    const store = tx.objectStore("foodComponents");
+    const asParent = store.index("foodId").getAll(id);
+    asParent.onsuccess = () => {
+      for (const row of asParent.result) store.delete(row.id);
+    };
+    const asChild = store.index("componentFoodId").getAll(id);
+    asChild.onsuccess = () => {
+      for (const row of asChild.result) store.delete(row.id);
+    };
     return finish(tx);
   });
 }
@@ -603,19 +818,20 @@ export function exportAll() {
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const tx = db.transaction(["foods", "entries", "targets", "weights"], "readonly");
+        const tx = db.transaction(["foods", "foodComponents", "entries", "targets", "weights"], "readonly");
         const result = {
           schemaVersion: SCHEMA_VERSION,
           exportedAt: new Date().toISOString(),
           foods: null,
+          foodComponents: null,
           entries: null,
           targets: null,
           weights: null,
           categories,
           distribution,
         };
-        let pending = 4;
-        for (const name of ["foods", "entries", "targets", "weights"]) {
+        let pending = 5;
+        for (const name of ["foods", "foodComponents", "entries", "targets", "weights"]) {
           const request = tx.objectStore(name).getAll();
           request.onsuccess = () => {
             result[name] = request.result;
@@ -835,9 +1051,31 @@ function copyWeight(raw, index) {
   return { dateKey: raw.dateKey, pounds, updatedAt };
 }
 
+function copyFoodComponent(raw, index) {
+  if (!raw || typeof raw !== "object") fail(`Meal component ${index} is not an object.`);
+  if (typeof raw.id !== "string" || raw.id.trim() === "") fail(`Meal component ${index} is missing an id.`);
+  if (typeof raw.foodId !== "string" || raw.foodId.trim() === "") fail(`Meal component ${index} is missing a meal id.`);
+  if (typeof raw.componentFoodId !== "string" || raw.componentFoodId.trim() === "") {
+    fail(`Meal component ${index} is missing a food id.`);
+  }
+  if (!isPositiveInt(raw.grams) || raw.grams > GRAM_MAX) fail(`Meal component ${index} has an invalid weight.`);
+  if (!Number.isInteger(raw.sort) || raw.sort < 0 || !Number.isSafeInteger(raw.sort)) {
+    fail(`Meal component ${index} has an invalid sort order.`);
+  }
+  return {
+    id: raw.id,
+    foodId: raw.foodId,
+    componentFoodId: raw.componentFoodId,
+    grams: raw.grams,
+    sort: raw.sort,
+  };
+}
+
 export function validateImport(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) fail("That file is not a backup.");
-  if (data.schemaVersion !== 1 && data.schemaVersion !== 2) fail("This backup version is not supported.");
+  if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3) {
+    fail("This backup version is not supported.");
+  }
   if (!Array.isArray(data.foods) || !Array.isArray(data.entries) || !Array.isArray(data.targets)) {
     fail("The backup is missing foods, entries, or targets.");
   }
@@ -848,6 +1086,14 @@ export function validateImport(data) {
   } else {
     if (!Array.isArray(data.weights)) fail("The backup is missing weigh-ins.");
     weights = data.weights.map((raw, index) => copyWeight(raw, index + 1));
+  }
+  let foodComponents;
+  if (data.schemaVersion === 1 || data.schemaVersion === 2) {
+    if (Object.hasOwn(data, "foodComponents")) fail("This backup version is not supported.");
+    foodComponents = [];
+  } else {
+    if (!Array.isArray(data.foodComponents)) fail("The backup is missing meal components.");
+    foodComponents = data.foodComponents.map((raw, index) => copyFoodComponent(raw, index + 1));
   }
   let categories;
   if (Object.hasOwn(data, "categories")) {
@@ -862,7 +1108,21 @@ export function validateImport(data) {
   requireUnique(entries, (entry) => entry.id, "entry");
   requireUnique(targets, (target) => target.effectiveDate, "calorie target");
   requireUnique(weights, (weight) => weight.dateKey, "weigh-in");
-  const result = { foods, entries, targets, weights };
+  requireUnique(foodComponents, (row) => row.id, "meal component");
+  const foodIds = new Set(foods.map((food) => food.id));
+  const parents = compositeFoodIds(foodComponents);
+  const counts = new Map();
+  for (const row of foodComponents) {
+    if (!foodIds.has(row.foodId) || !foodIds.has(row.componentFoodId)) {
+      fail("A meal component points at a missing food.");
+    }
+    if (row.foodId === row.componentFoodId) fail("A meal cannot include itself.");
+    if (parents.has(row.componentFoodId)) fail("A meal cannot include another meal.");
+    const n = (counts.get(row.foodId) || 0) + 1;
+    if (n > MEAL_LINES_MAX) fail(`A meal can include ${MEAL_LINES_MAX} foods.`);
+    counts.set(row.foodId, n);
+  }
+  const result = { foods, foodComponents, entries, targets, weights };
   if (categories) result.categories = categories;
   if (Object.hasOwn(data, "distribution")) {
     const distribution = normalizeDistribution(data.distribution);
@@ -874,16 +1134,19 @@ export function validateImport(data) {
 
 export function replaceAll(data) {
   return openDb().then((db) => {
-    const tx = db.transaction(["foods", "entries", "targets", "weights"], "readwrite");
+    const tx = db.transaction(["foods", "foodComponents", "entries", "targets", "weights"], "readwrite");
     const foods = tx.objectStore("foods");
+    const foodComponents = tx.objectStore("foodComponents");
     const entries = tx.objectStore("entries");
     const targets = tx.objectStore("targets");
     const weights = tx.objectStore("weights");
     foods.clear();
+    foodComponents.clear();
     entries.clear();
     targets.clear();
     weights.clear();
     for (const food of data.foods) foods.put(food);
+    for (const row of data.foodComponents || []) foodComponents.put(row);
     for (const entry of data.entries) entries.put(entry);
     for (const target of data.targets) targets.put(target);
     for (const weight of data.weights) weights.put(weight);
@@ -913,17 +1176,30 @@ function assertImportFails(fn, snippet) {
 function selfCheckImport() {
   const version1 = validateImport({ schemaVersion: 1, foods: [], entries: [], targets: [] });
   assertImport(version1.weights.length === 0, "version 1 has no weigh-ins");
+  assertImport(version1.foodComponents.length === 0, "version 1 has no meal components");
   assertImportFails(
     () => validateImport({ schemaVersion: 1, foods: [], entries: [], targets: [], weights: [] }),
     "not supported",
   );
   assertImportFails(
-    () => validateImport({ schemaVersion: 3, foods: [], entries: [], targets: [], weights: [] }),
+    () => validateImport({ schemaVersion: 4, foods: [], entries: [], targets: [], weights: [], foodComponents: [] }),
     "not supported",
   );
   assertImportFails(
     () => validateImport({ schemaVersion: 2, foods: [], entries: [], targets: [] }),
     "missing weigh-ins",
+  );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 2,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [],
+        foodComponents: [],
+      }),
+    "not supported",
   );
   const version2 = validateImport({
     schemaVersion: 2,
@@ -933,6 +1209,7 @@ function selfCheckImport() {
     weights: [{ dateKey: "2020-01-01", pounds: 180.5, updatedAt: 1 }],
   });
   assertImport(version2.weights[0].pounds === 180.5, "version 2 weigh-in");
+  assertImport(version2.foodComponents.length === 0, "version 2 has no meal components");
   assertImport(version2.distribution == null, "missing distribution stays unset");
   assertImportFails(
     () =>
@@ -969,6 +1246,68 @@ function selfCheckImport() {
         weights: [{ dateKey: "2020-01-01", pounds: 180.25 }],
       }),
     "invalid weight",
+  );
+  assertImportFails(
+    () => validateImport({ schemaVersion: 3, foods: [], entries: [], targets: [], weights: [] }),
+    "missing meal components",
+  );
+  const version3 = validateImport({
+    schemaVersion: 3,
+    foods: [
+      { id: "meal", name: "Bowl", calories: 300, category: "lunch", createdAt: 1, updatedAt: 1 },
+      { id: "rice", name: "Rice", calories: 130, category: "lunch", serving: "100 g", createdAt: 1, updatedAt: 1 },
+      { id: "bean", name: "Beans", calories: 120, category: "lunch", serving: "100 g", createdAt: 1, updatedAt: 1 },
+    ],
+    foodComponents: [
+      { id: "c1", foodId: "meal", componentFoodId: "rice", grams: 150, sort: 0 },
+      { id: "c2", foodId: "meal", componentFoodId: "bean", grams: 100, sort: 1 },
+    ],
+    entries: [],
+    targets: [],
+    weights: [],
+    categories: [
+      { id: "lunch", label: "Lunch" },
+      { id: "drink", label: "Drink" },
+      { id: "snack", label: "Snack" },
+      { id: "breakfast", label: "Breakfast" },
+      { id: "dinner", label: "Dinner" },
+    ],
+  });
+  assertImport(version3.foodComponents.length === 2, "version 3 meal components");
+  assertImport(compositeFoodIds(version3.foodComponents).has("meal"), "composite parent set");
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 3,
+        foods: [
+          { id: "meal", name: "Bowl", calories: 1, createdAt: 1, updatedAt: 1 },
+          { id: "rice", name: "Rice", calories: 1, createdAt: 1, updatedAt: 1 },
+        ],
+        foodComponents: [{ id: "c1", foodId: "meal", componentFoodId: "missing", grams: 10, sort: 0 }],
+        entries: [],
+        targets: [],
+        weights: [],
+      }),
+    "missing food",
+  );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 3,
+        foods: [
+          { id: "outer", name: "Outer", calories: 1, createdAt: 1, updatedAt: 1 },
+          { id: "inner", name: "Inner", calories: 1, createdAt: 1, updatedAt: 1 },
+          { id: "rice", name: "Rice", calories: 1, createdAt: 1, updatedAt: 1 },
+        ],
+        foodComponents: [
+          { id: "c1", foodId: "outer", componentFoodId: "inner", grams: 10, sort: 0 },
+          { id: "c2", foodId: "inner", componentFoodId: "rice", grams: 10, sort: 0 },
+        ],
+        entries: [],
+        targets: [],
+        weights: [],
+      }),
+    "another meal",
   );
   assertImport(parsePounds("180.5") === 180.5, "parse one decimal");
   assertImport(parsePounds("180") === 180, "parse whole pounds");

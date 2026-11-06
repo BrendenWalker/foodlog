@@ -170,14 +170,15 @@
           <p id="meal-error" class="error" hidden></p>
           <p id="meal-saved" class="hint" role="status" hidden></p>
           <button type="button" id="meal-add" class="wide">Add to today</button>
-          <label for="meal-category">Category</label>
+          <label id="meal-category-label" for="meal-category">Category</label>
           <select id="meal-category">
             <option value=""></option>
           </select>
           <p id="meal-category-error" class="error" hidden></p>
           <button type="button" id="meal-library" class="wide secondary">Add to Library</button>
+          <button type="button" id="meal-delete" class="wide danger" hidden>Delete Meal</button>
         </form>
-        <p class="hint">Stays on this phone until you add it to today.</p>
+        <p id="meal-hint" class="hint">Stays on this phone until you add it to today.</p>
       </section>
 
       <section id="view-serve" data-view="serve" hidden>
