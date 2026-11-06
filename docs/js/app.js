@@ -1724,7 +1724,21 @@ async function onMealLibrary() {
   try {
     await saveFood({ name: meal.name, calories: meal.calories, category, serving: `${meal.grams} g` });
     mealLibraryKey = key;
+    mealDraft = emptyMealDraft();
+    try {
+      clearMealDraft();
+    } catch (error) {
+      console.error(error);
+    }
+    $("meal-name").value = "";
+    $("meal-category").value = "";
+    $("meal-search").value = "";
+    setError("meal-error", "");
+    setError("meal-category-error", "");
     setError("meal-saved", `Saved to Library as ${label}.`);
+    renderMealSearch();
+    renderMealLines();
+    paintMealTotal();
     try {
       await loadFoods();
     } catch (error) {
