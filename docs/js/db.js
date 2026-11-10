@@ -955,6 +955,36 @@ export function windowLeft(consumed, target, distribution, minutes) {
   return cap - consumed;
 }
 
+// Remaining kcal for the current meal (leftovers rolled in) plus future meal allotments.
+// Null once consumption has passed the current window cap.
+export function mealRemainders(consumed, target, distribution, minutes) {
+  const breakfastKcal = paceKcal(target, distribution.breakfast);
+  const lunchCap = paceKcal(target, distribution.breakfast + distribution.lunch);
+  const lunchKcal = lunchCap - breakfastKcal;
+  const dinnerKcal = target - lunchCap;
+  if (minutes < distribution.lunchStart) {
+    if (consumed > breakfastKcal) return null;
+    return {
+      meal: "breakfast",
+      left: breakfastKcal - consumed,
+      upcoming: [
+        { meal: "lunch", kcal: lunchKcal },
+        { meal: "dinner", kcal: dinnerKcal },
+      ],
+    };
+  }
+  if (minutes < distribution.dinnerStart) {
+    if (consumed > lunchCap) return null;
+    return {
+      meal: "lunch",
+      left: lunchCap - consumed,
+      upcoming: [{ meal: "dinner", kcal: dinnerKcal }],
+    };
+  }
+  if (consumed > target) return null;
+  return { meal: "dinner", left: target - consumed, upcoming: [] };
+}
+
 function requireUnique(items, keyFn, label) {
   const seen = new Set();
   for (const item of items) {
@@ -1416,6 +1446,30 @@ function selfCheckPace() {
     windowLeft(0, 2000, { ...distribution, breakfast: 0, lunch: 80, dinner: 20 }, 10 * 60) === 0,
     "zero breakfast share",
   );
+  const morning = mealRemainders(200, 2000, distribution, 10 * 60);
+  assertImport(morning?.meal === "breakfast" && morning.left === 700, "remainders breakfast left");
+  assertImport(
+    morning?.upcoming.length === 2 &&
+      morning.upcoming[0].meal === "lunch" &&
+      morning.upcoming[0].kcal === 700 &&
+      morning.upcoming[1].meal === "dinner" &&
+      morning.upcoming[1].kcal === 400,
+    "remainders breakfast upcoming",
+  );
+  const midday = mealRemainders(200, 2000, distribution, 12 * 60);
+  assertImport(midday?.meal === "lunch" && midday.left === 1400, "remainders lunch rolls leftovers");
+  assertImport(
+    midday?.upcoming.length === 1 && midday.upcoming[0].meal === "dinner" && midday.upcoming[0].kcal === 400,
+    "remainders lunch upcoming",
+  );
+  const evening = mealRemainders(200, 2000, distribution, 17 * 60);
+  assertImport(
+    evening?.meal === "dinner" && evening.left === 1800 && evening.upcoming.length === 0,
+    "remainders dinner rolls leftovers",
+  );
+  assertImport(mealRemainders(901, 2000, distribution, 10 * 60) === null, "remainders past breakfast cap");
+  assertImport(mealRemainders(1601, 2000, distribution, 12 * 60) === null, "remainders past lunch cap");
+  assertImport(mealRemainders(2001, 2000, distribution, 17 * 60) === null, "remainders past daily target");
   const imported = validateImport({
     schemaVersion: 2,
     foods: [],

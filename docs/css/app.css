@@ -142,6 +142,8 @@ h2 {
   font-size: 1.75rem;
   font-weight: 750;
   letter-spacing: -0.02em;
+  line-height: 1.2;
+  white-space: pre-line;
   font-variant-numeric: tabular-nums;
 }
 

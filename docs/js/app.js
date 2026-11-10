@@ -35,9 +35,9 @@ import {
   getRecentFoods,
   getTargets,
   moveFoodsToCategory,
+  mealRemainders,
   paceCap,
   paceKcal,
-  windowLeft,
   parsePounds,
   parsePositiveInt,
   putEntry,
@@ -258,7 +258,6 @@ function paintStatus(consumed, target, distribution, minutes) {
   const over = consumed > target;
   const paceOver = !over && percent < 100 && consumed > cap;
   const meal = minutes < distribution.lunchStart ? "breakfast" : "lunch";
-  const left = windowLeft(consumed, target, distribution, minutes);
   sub.classList.toggle("over", over || paceOver);
   bar.classList.toggle("over", over);
   bar.classList.toggle("pace", paceOver);
@@ -268,16 +267,20 @@ function paintStatus(consumed, target, distribution, minutes) {
   } else if (paceOver) {
     sub.textContent = `${formatNum(consumed - cap)} kcal over ${meal}`;
     fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
-  } else if (left != null) {
-    sub.textContent = `${formatNum(left)} kcal left for ${meal}`;
-    fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
   } else {
-    sub.textContent = `${formatNum(target - consumed)} kcal remaining`;
+    const remainders = mealRemainders(consumed, target, distribution, minutes);
+    const lines = remainders
+      ? [
+          `${formatNum(remainders.left)} kcal left for ${remainders.meal}`,
+          ...remainders.upcoming.map((row) => `${formatNum(row.kcal)} kcal ${row.meal}`),
+        ]
+      : [`${formatNum(target - consumed)} kcal remaining`];
+    sub.textContent = lines.join("\n");
     fill.style.width = `${Math.min(100, (consumed / target) * 100)}%`;
   }
   bar.setAttribute("aria-valuemax", String(target));
   bar.setAttribute("aria-valuenow", String(consumed));
-  bar.setAttribute("aria-valuetext", sub.textContent);
+  bar.setAttribute("aria-valuetext", sub.textContent.replaceAll("\n", "; "));
 }
 
 async function refreshStatus() {
