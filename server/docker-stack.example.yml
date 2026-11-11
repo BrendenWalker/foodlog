@@ -1,12 +1,14 @@
 # Example Swarm stack using an external / in-house Postgres.
-# Build & push the image, then:
+# Images publish to GHCR on merge to main:
+#   docker pull ghcr.io/brendenwalker/foodlog-sync:latest
 #   docker stack deploy -c docker-stack.example.yml foodlog
 #
 # Put Traefik/Caddy/nginx TLS in front; the PWA requires HTTPS.
+# If the package is private: docker login ghcr.io
 
 services:
   sync:
-    image: ghcr.io/example/foodlog-sync:latest
+    image: ghcr.io/brendenwalker/foodlog-sync:latest
     environment:
       FOODLOG_ADDR: ":8080"
       DATABASE_URL: postgres://foodlog:SECRET@postgres:5432/foodlog?sslmode=require
