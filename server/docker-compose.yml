@@ -5,8 +5,12 @@
 #   export FOODLOG_SYNC_SECRET='oats-42'
 #   docker compose up --build -d
 #
-# Swarm: build/push the image, then use the foodlog-sync service block with
-# an external Postgres DATABASE_URL and your HTTPS ingress in front.
+# Published images (after merge to main):
+#   ghcr.io/brendenwalker/foodlog-sync:latest
+#   ghcr.io/brendenwalker/foodlog-sync:sha-<short>
+#
+# Swarm: pull from GHCR (see docker-stack.example.yml) with your Postgres
+# DATABASE_URL and HTTPS ingress in front.
 
 services:
   foodlog-sync:
