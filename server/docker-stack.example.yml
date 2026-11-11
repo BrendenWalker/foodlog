@@ -1,6 +1,7 @@
 # Example Swarm stack using an external / in-house Postgres.
-# Images publish to GHCR on merge to main:
+# Images publish to GHCR when a semver tag is pushed (same cadence as Pages):
 #   docker pull ghcr.io/brendenwalker/foodlog-sync:latest
+#   docker pull ghcr.io/brendenwalker/foodlog-sync:1.8.0
 #   docker stack deploy -c docker-stack.example.yml foodlog
 #
 # Put Traefik/Caddy/nginx TLS in front; the PWA requires HTTPS.
