@@ -27,7 +27,7 @@ export FOODLOG_SYNC_SECRET='oats-42'
 docker compose up --build -d
 ```
 
-Set the PWA server URL to your HTTPS endpoint and the same shared secret. Merges to `main` that touch `server/` publish `ghcr.io/brendenwalker/foodlog-sync` (PRs only test-build). For Swarm, pull that image and point `DATABASE_URL` at your Postgres; see `server/docker-stack.example.yml`.
+Set the PWA server URL to your HTTPS endpoint and the same shared secret. Semver tags publish both the Pages site and `ghcr.io/brendenwalker/foodlog-sync` (`latest` plus the version, e.g. `1.8.0`). PRs that touch `server/` only test-build the image. For Swarm, pull that image and point `DATABASE_URL` at your Postgres; see `server/docker-stack.example.yml`.
 
 ## Publish
 
