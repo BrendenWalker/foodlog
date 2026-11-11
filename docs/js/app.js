@@ -1,5 +1,16 @@
 import { dateFromKey, groupEntriesByDay, targetFor, targetRecordFor, todayKey } from "./dates.js";
 import {
+  bindSyncLifecycle,
+  downloadServerToLocal,
+  loadSyncConfig,
+  noteLocalWrite,
+  pendingCount,
+  saveSyncConfig,
+  syncEnabled,
+  syncNow,
+  uploadLocalToServer,
+} from "./sync.js";
+import {
   ACTIVITY_LEVELS,
   BODY_LIMITS,
   CATEGORY_NAME_MAX,
@@ -36,6 +47,7 @@ import {
   getTargets,
   moveFoodsToCategory,
   mealRemainders,
+  onLocalWrite,
   paceCap,
   paceKcal,
   parsePounds,
@@ -67,6 +79,7 @@ const TITLES = {
   select: "Add from Library",
   calories: "Calories",
   distribution: "Distribution",
+  sync: "Sync",
   import: "Import/Export",
 };
 
@@ -78,6 +91,7 @@ const PARENT = {
   calories: "settings",
   distribution: "settings",
   categories: "settings",
+  sync: "settings",
   import: "settings",
 };
 
@@ -654,6 +668,113 @@ async function renderSettings() {
   paintPreview();
 }
 
+async function paintSyncStatus() {
+  const cfg = loadSyncConfig();
+  const status = $("sync-status");
+  if (!cfg.enabled) {
+    status.textContent = "Sync is off. This device keeps data locally only.";
+    return;
+  }
+  const pending = await pendingCount();
+  const parts = [];
+  if (cfg.lastSyncAt) parts.push(`Last sync ${new Date(cfg.lastSyncAt).toLocaleString()}`);
+  else parts.push("Not synced yet");
+  parts.push(pending ? `${pending} change${pending === 1 ? "" : "s"} queued` : "Queue empty");
+  if (cfg.lastError) parts.push(cfg.lastError);
+  status.textContent = parts.join(" · ");
+}
+
+function renderSync() {
+  const cfg = loadSyncConfig();
+  if (!$("sync-form").contains(document.activeElement)) {
+    $("sync-enabled").checked = cfg.enabled;
+    $("sync-url").value = cfg.url;
+    $("sync-secret").value = cfg.secret;
+    $("sync-saved").hidden = true;
+    setError("sync-url-error", "");
+    setError("sync-secret-error", "");
+    $("sync-msg").textContent = "";
+  }
+  paintSyncStatus();
+}
+
+function onSyncInput() {
+  $("sync-saved").hidden = true;
+  $("sync-msg").textContent = "";
+  setError("sync-url-error", "");
+  setError("sync-secret-error", "");
+}
+
+function onSaveSync(event) {
+  event.preventDefault();
+  const enabled = $("sync-enabled").checked;
+  const url = $("sync-url").value.trim().replace(/\/+$/, "");
+  const secret = $("sync-secret").value;
+  let bad = false;
+  if (enabled && !/^https?:\/\//i.test(url)) {
+    setError("sync-url-error", "Enter a full URL starting with http:// or https://.");
+    bad = true;
+  }
+  if (enabled && secret.trim().length < 4) {
+    setError("sync-secret-error", "Secret must be at least 4 characters.");
+    bad = true;
+  }
+  if (bad) return;
+  const prev = loadSyncConfig();
+  saveSyncConfig({ ...prev, enabled, url, secret, lastError: "" });
+  $("sync-saved").hidden = false;
+  $("sync-saved").textContent = "Saved.";
+  paintSyncStatus();
+}
+
+async function onSyncNow() {
+  $("sync-msg").textContent = "Syncing…";
+  const result = await syncNow();
+  categories = loadCategories();
+  await paintSyncStatus();
+  if (result.ok) {
+    $("sync-msg").textContent = "Synced.";
+    await refresh();
+  } else if (result.offline) $("sync-msg").textContent = "Offline — changes stay queued.";
+  else $("sync-msg").textContent = loadSyncConfig().lastError || "Sync failed.";
+}
+
+async function onSyncUpload() {
+  if (!syncEnabled()) {
+    $("sync-msg").textContent = "Save sync settings with Sync turned on first.";
+    return;
+  }
+  if (!confirm("Replace the server copy with everything on this device?")) return;
+  $("sync-msg").textContent = "Uploading…";
+  try {
+    await uploadLocalToServer();
+    await paintSyncStatus();
+    $("sync-msg").textContent = "Server updated from this device.";
+  } catch (error) {
+    $("sync-msg").textContent = error.message || "Upload failed.";
+    await paintSyncStatus();
+  }
+}
+
+async function onSyncDownload() {
+  if (!syncEnabled()) {
+    $("sync-msg").textContent = "Save sync settings with Sync turned on first.";
+    return;
+  }
+  if (!confirm("Replace everything on this device with the server copy?")) return;
+  $("sync-msg").textContent = "Downloading…";
+  try {
+    await downloadServerToLocal();
+    categories = loadCategories();
+    await paintSyncStatus();
+    $("sync-msg").textContent = "This device now matches the server.";
+    await refresh();
+  } catch (error) {
+    $("sync-msg").textContent = error.message || "Download failed.";
+    await paintSyncStatus();
+  }
+}
+
 async function refresh() {
   if (view === "today") await renderToday();
   else if (view === "history") await renderHistory();
@@ -671,6 +792,7 @@ async function refresh() {
   else if (view === "calories") await renderSettings();
   else if (view === "distribution") renderDistribution();
   else if (view === "categories") await renderCategories();
+  else if (view === "sync") renderSync();
 }
 
 function formatPounds(value) {
@@ -1266,6 +1388,10 @@ async function onTab(name) {
   }
   if (name === "meal") clearMealSession();
   else if (mealSession && name !== "meal") clearMealSession();
+  if (syncEnabled() && name !== "sync") {
+    await syncNow();
+    categories = loadCategories();
+  }
   show(name);
   await refresh();
 }
@@ -1980,6 +2106,12 @@ function bind() {
   $("distribution-form").addEventListener("submit", onSaveDistribution);
   $("distribution-form").addEventListener("input", onDistributionInput);
   $("distribution-form").addEventListener("change", onDistributionInput);
+  $("sync-form").addEventListener("submit", onSaveSync);
+  $("sync-form").addEventListener("input", onSyncInput);
+  $("sync-form").addEventListener("change", onSyncInput);
+  $("sync-now").addEventListener("click", onSyncNow);
+  $("sync-upload").addEventListener("click", onSyncUpload);
+  $("sync-download").addEventListener("click", onSyncDownload);
   $("category-form").addEventListener("submit", onSaveCategory);
   $("category-cancel").addEventListener("click", resetCategoryForm);
   $("category-move-delete").addEventListener("click", onCategoryMoveDelete);
@@ -2029,8 +2161,16 @@ async function init() {
   assertServingLabel();
   assertCalorieFormula();
   assertRateSign();
+  onLocalWrite(noteLocalWrite);
   bind();
+  bindSyncLifecycle(async () => {
+    categories = loadCategories();
+    if (view === "sync") await paintSyncStatus();
+    else await refresh();
+  });
   await ensureDefaultTarget(todayKey());
+  if (syncEnabled()) await syncNow();
+  categories = loadCategories();
   show("today");
   await renderToday();
   if (navigator.storage && navigator.storage.persist) {

@@ -1,8 +1,17 @@
 import { localDateKey, todayKey } from "./dates.js";
 
 const DB_NAME = "foodlog";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 export const SCHEMA_VERSION = 3;
+export const SYNC_TABLES = Object.freeze([
+  "foods",
+  "foodComponents",
+  "entries",
+  "targets",
+  "weights",
+  "categories",
+  "distribution",
+]);
 export const CATEGORY_NAME_MAX = 40;
 const CATEGORY_ID_MAX = 80;
 const CATEGORIES_KEY = "foodlog.categories";
@@ -56,6 +65,7 @@ export function saveCategories(value) {
   const clean = normalizeCategories(value);
   if (!clean) throw new Error("The categories are invalid.");
   localStorage.setItem(CATEGORIES_KEY, JSON.stringify(clean));
+  notifyLocalWrite({ table: "categories", op: "replaceAll" });
   return clean;
 }
 
@@ -67,6 +77,32 @@ export function reassignFoods(foods, fromId, toId) {
 }
 
 let dbPromise;
+let localWriteHook = null;
+let silentWrites = 0;
+
+// App wires sync here so db.js never imports the sync module.
+export function onLocalWrite(hook) {
+  localWriteHook = typeof hook === "function" ? hook : null;
+}
+
+export async function withSilentWrites(fn) {
+  silentWrites += 1;
+  try {
+    return await fn();
+  } finally {
+    silentWrites -= 1;
+  }
+}
+
+function notifyLocalWrite(change) {
+  if (silentWrites > 0 || !localWriteHook) return;
+  try {
+    const result = localWriteHook(change);
+    if (result && typeof result.then === "function") result.catch(() => {});
+  } catch {
+    /* sync must not break local writes */
+  }
+}
 
 function openDb() {
   if (!dbPromise) {
@@ -92,6 +128,9 @@ function openDb() {
           const components = db.createObjectStore("foodComponents", { keyPath: "id" });
           components.createIndex("foodId", "foodId");
           components.createIndex("componentFoodId", "componentFoodId");
+        }
+        if (!db.objectStoreNames.contains("outbox")) {
+          db.createObjectStore("outbox", { keyPath: "id" });
         }
       };
       request.onsuccess = () => {
@@ -133,6 +172,43 @@ function readAll(storeName) {
         request.onerror = () => reject(request.error);
       }),
   );
+}
+
+export function replaceStore(storeName, rows) {
+  if (!["foods", "foodComponents", "entries", "targets", "weights", "outbox"].includes(storeName)) {
+    return Promise.reject(new Error("Unknown store."));
+  }
+  return openDb().then((db) => {
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
+    store.clear();
+    for (const row of rows) store.put(row);
+    return finish(tx);
+  });
+}
+
+export function listOutbox() {
+  return readAll("outbox");
+}
+
+export function addOutbox(entry) {
+  return openDb().then((db) => {
+    const tx = db.transaction("outbox", "readwrite");
+    tx.objectStore("outbox").put(entry);
+    return finish(tx, entry);
+  });
+}
+
+export function removeOutbox(id) {
+  return openDb().then((db) => {
+    const tx = db.transaction("outbox", "readwrite");
+    tx.objectStore("outbox").delete(id);
+    return finish(tx);
+  });
+}
+
+export function clearOutbox() {
+  return replaceStore("outbox", []);
 }
 
 export function getAllFoods() {
@@ -492,6 +568,7 @@ export function saveFood({ id, name, calories, category, serving = "" }) {
         tx.oncomplete = () => {
           if (settled) return;
           settled = true;
+          notifyLocalWrite({ table: "foods", op: "put", id: food.id, doc: food });
           resolve(food);
         };
         tx.onerror = () => fail(tx.error);
@@ -629,6 +706,8 @@ export function saveFoodWithComponents({ id, name, calories, category, serving =
         tx.oncomplete = () => {
           if (settled) return;
           settled = true;
+          notifyLocalWrite({ table: "foods", op: "put", id: food.id, doc: food });
+          notifyLocalWrite({ table: "foodComponents", op: "replaceAll" });
           resolve(food);
         };
         tx.onerror = () => fail(tx.error);
@@ -650,7 +729,10 @@ export function deleteFood(id) {
     asChild.onsuccess = () => {
       for (const row of asChild.result) store.delete(row.id);
     };
-    return finish(tx);
+    return finish(tx).then(() => {
+      notifyLocalWrite({ table: "foods", op: "delete", id });
+      notifyLocalWrite({ table: "foodComponents", op: "replaceAll" });
+    });
   });
 }
 
@@ -663,13 +745,19 @@ export function moveFoodsToCategory(fromId, toId) {
     const tx = db.transaction("foods", "readwrite");
     const store = tx.objectStore("foods");
     const request = store.getAll();
+    const changed = [];
     request.onsuccess = () => {
       const next = reassignFoods(request.result, fromId, toId);
       for (let index = 0; index < next.length; index++) {
-        if (next[index] !== request.result[index]) store.put(next[index]);
+        if (next[index] !== request.result[index]) {
+          store.put(next[index]);
+          changed.push(next[index]);
+        }
       }
     };
-    return finish(tx);
+    return finish(tx).then(() => {
+      for (const food of changed) notifyLocalWrite({ table: "foods", op: "put", id: food.id, doc: food });
+    });
   });
 }
 
@@ -698,7 +786,11 @@ export function addEntry(food, timestamp = Date.now()) {
         foods.put(row);
       };
     }
-    return finish(tx, entry);
+    return finish(tx, entry).then((saved) => {
+      notifyLocalWrite({ table: "entries", op: "put", id: saved.id, doc: saved });
+      if (food.id) notifyLocalWrite({ table: "foods", op: "touch", id: food.id });
+      return saved;
+    });
   });
 }
 
@@ -706,7 +798,7 @@ export function deleteEntry(id) {
   return openDb().then((db) => {
     const tx = db.transaction("entries", "readwrite");
     tx.objectStore("entries").delete(id);
-    return finish(tx);
+    return finish(tx).then(() => notifyLocalWrite({ table: "entries", op: "delete", id }));
   });
 }
 
@@ -714,7 +806,10 @@ export function putEntry(entry) {
   return openDb().then((db) => {
     const tx = db.transaction("entries", "readwrite");
     tx.objectStore("entries").put(entry);
-    return finish(tx, entry);
+    return finish(tx, entry).then((saved) => {
+      notifyLocalWrite({ table: "entries", op: "put", id: saved.id, doc: saved });
+      return saved;
+    });
   });
 }
 
@@ -731,7 +826,10 @@ export function saveWeight(dateKey, pounds) {
     const tx = db.transaction("weights", "readwrite");
     const record = { dateKey, pounds: normalized, updatedAt: Date.now() };
     tx.objectStore("weights").put(record);
-    return finish(tx, record);
+    return finish(tx, record).then((saved) => {
+      notifyLocalWrite({ table: "weights", op: "put", id: saved.dateKey, doc: saved });
+      return saved;
+    });
   });
 }
 
@@ -739,7 +837,7 @@ export function deleteWeight(dateKey) {
   return openDb().then((db) => {
     const tx = db.transaction("weights", "readwrite");
     tx.objectStore("weights").delete(dateKey);
-    return finish(tx);
+    return finish(tx).then(() => notifyLocalWrite({ table: "weights", op: "delete", id: dateKey }));
   });
 }
 
@@ -801,7 +899,10 @@ export function setTarget(effectiveDate, calories, profile) {
   return openDb().then((db) => {
     const tx = db.transaction("targets", "readwrite");
     tx.objectStore("targets").put(record);
-    return finish(tx, record);
+    return finish(tx, record).then((saved) => {
+      notifyLocalWrite({ table: "targets", op: "put", id: saved.effectiveDate, doc: saved });
+      return saved;
+    });
   });
 }
 
@@ -931,6 +1032,7 @@ export function saveDistribution(value) {
   const clean = normalizeDistribution(value);
   if (!clean) throw new Error("The meal distribution is invalid.");
   localStorage.setItem(DISTRIBUTION_KEY, JSON.stringify(clean));
+  notifyLocalWrite({ table: "distribution", op: "replaceAll" });
   return clean;
 }
 
@@ -1183,6 +1285,11 @@ export function replaceAll(data) {
     return finish(tx).then(() => {
       saveCategories(data.categories || defaultCategories());
       if (data.distribution) saveDistribution(data.distribution);
+      notifyLocalWrite({ table: "foods", op: "replaceAll" });
+      notifyLocalWrite({ table: "foodComponents", op: "replaceAll" });
+      notifyLocalWrite({ table: "entries", op: "replaceAll" });
+      notifyLocalWrite({ table: "targets", op: "replaceAll" });
+      notifyLocalWrite({ table: "weights", op: "replaceAll" });
     });
   });
 }

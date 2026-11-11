@@ -17,6 +17,18 @@ After that first open, tracking works without a network connection.
 
 Foods, meals, and the daily calorie target stay in this browser. Use **Settings → Export Data** to save a backup, and **Import Data** to restore one.
 
+## Optional sync server
+
+The PWA stores data on-device by default. Settings → Sync can point at a small Docker API that keeps a central copy in Postgres (or SQLite) so desktop and phone stay aligned, including offline queues.
+
+```
+cd server
+export FOODLOG_SYNC_SECRET='oats-42'
+docker compose up --build -d
+```
+
+Set the PWA server URL to your HTTPS endpoint and the same shared secret. For Swarm, build/push the `server` image and point `DATABASE_URL` at your existing Postgres; see `server/docker-compose.yml`.
+
 ## Publish
 
 The app is the `docs/` folder. The README stays in the repository and is not part of the site.

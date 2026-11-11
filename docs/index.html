@@ -196,8 +196,33 @@
           <li><button type="button" class="row" data-open="calories">Calories</button></li>
           <li><button type="button" class="row" data-open="distribution">Distribution</button></li>
           <li><button type="button" class="row" data-open="categories">Categories</button></li>
+          <li><button type="button" class="row" data-open="sync">Sync</button></li>
           <li><button type="button" class="row" data-open="import">Import/Export</button></li>
         </ul>
+      </section>
+
+      <section id="view-sync" data-view="sync" hidden>
+        <form id="sync-form">
+          <label class="choice"><input type="checkbox" id="sync-enabled" /> Sync with server</label>
+          <p class="hint">Local data stays on this device. When sync is on, new changes queue while offline and update the central database when you are back online. First time: Upload this device, or Replace from server if the server already has your data.</p>
+
+          <label for="sync-url">Server URL</label>
+          <input id="sync-url" type="url" autocomplete="off" placeholder="https://sync.example.com" enterkeyhint="next" />
+          <p id="sync-url-error" class="error" hidden></p>
+
+          <label for="sync-secret">Shared secret</label>
+          <input id="sync-secret" type="password" autocomplete="off" placeholder="easy to type" enterkeyhint="done" />
+          <p id="sync-secret-error" class="error" hidden></p>
+
+          <button type="submit" class="wide">Save</button>
+          <p id="sync-saved" class="hint" role="status" hidden></p>
+        </form>
+
+        <p id="sync-status" class="hint"></p>
+        <button type="button" id="sync-now" class="wide secondary">Sync now</button>
+        <button type="button" id="sync-upload" class="wide secondary">Upload this device to server</button>
+        <button type="button" id="sync-download" class="wide secondary">Replace this device from server</button>
+        <p id="sync-msg" class="hint" role="status"></p>
       </section>
 
       <section id="view-calories" data-view="calories" hidden>

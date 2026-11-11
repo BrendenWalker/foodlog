@@ -1,0 +1,30 @@
+# Example Swarm stack using an external / in-house Postgres.
+# Build & push the image, then:
+#   docker stack deploy -c docker-stack.example.yml foodlog
+#
+# Put Traefik/Caddy/nginx TLS in front; the PWA requires HTTPS.
+
+services:
+  sync:
+    image: ghcr.io/example/foodlog-sync:latest
+    environment:
+      FOODLOG_ADDR: ":8080"
+      DATABASE_URL: postgres://foodlog:SECRET@postgres:5432/foodlog?sslmode=require
+      FOODLOG_SYNC_SECRET: oats-42
+      FOODLOG_CORS_ORIGINS: https://brendenwalker.github.io
+    networks:
+      - proxy
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      labels:
+        - traefik.enable=true
+        # adjust to your ingress labels
+
+networks:
+  proxy:
+    external: true
+  internal:
+    external: true

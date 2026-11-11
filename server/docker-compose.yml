@@ -1,0 +1,46 @@
+# Sample stack for local / Swarm-style deploy.
+# Point DATABASE_URL at your in-house Postgres in production and drop the `db` service.
+#
+#   cd server
+#   export FOODLOG_SYNC_SECRET='oats-42'
+#   docker compose up --build -d
+#
+# Swarm: build/push the image, then use the foodlog-sync service block with
+# an external Postgres DATABASE_URL and your HTTPS ingress in front.
+
+services:
+  foodlog-sync:
+    build: .
+    image: foodlog-sync:local
+    ports:
+      - "8080:8080"
+    environment:
+      FOODLOG_ADDR: ":8080"
+      # Postgres (compose db service below) or sqlite:./data/foodlog.db
+      DATABASE_URL: postgres://foodlog:foodlog@db:5432/foodlog?sslmode=disable
+      FOODLOG_SYNC_SECRET: ${FOODLOG_SYNC_SECRET:-change-me-now}
+      # Comma-separated Origins for the GitHub Pages PWA (required in browsers).
+      FOODLOG_CORS_ORIGINS: ${FOODLOG_CORS_ORIGINS:-http://localhost:5500,https://brendenwalker.github.io}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Demo database only — replace with your Swarm Postgres in production.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: foodlog
+      POSTGRES_PASSWORD: foodlog
+      POSTGRES_DB: foodlog
+    volumes:
+      - foodlog_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foodlog -d foodlog"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  foodlog_pg:
