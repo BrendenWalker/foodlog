@@ -33,7 +33,8 @@ func main() {
 	}
 
 	apiServer := &api.Server{Store: st, MaxBytes: cfg.MaxBytes, Origins: cfg.CORSOrigins}
-	handler := auth.New(cfg.SyncSecret).Middleware(apiServer.Handler())
+	// CORS must wrap auth: preflight has no Bearer token; 401s need ACAO too.
+	handler := apiServer.CORS(auth.New(cfg.SyncSecret).Middleware(apiServer.Routes()))
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,

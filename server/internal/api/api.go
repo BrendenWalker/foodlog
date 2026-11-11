@@ -15,7 +15,10 @@ type Server struct {
 	Origins  []string
 }
 
-func (s *Server) Handler() http.Handler {
+// Routes returns the API mux without middleware. Wire CORS outside auth so
+// browser preflight (OPTIONS, no Authorization) and 401 bodies still get
+// Access-Control-* headers.
+func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /v1/meta", s.meta)
@@ -25,7 +28,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/{table}/{id}", s.put)
 	mux.HandleFunc("DELETE /v1/{table}/{id}", s.del)
 	mux.HandleFunc("PUT /v1/{table}", s.replaceTable)
-	return s.cors(mux)
+	return mux
+}
+
+// CORS wraps next with Origin allowlist handling and OPTIONS short-circuit.
+func (s *Server) CORS(next http.Handler) http.Handler {
+	return s.cors(next)
+}
+
+// Handler is Routes with CORS only (no auth). Prefer CORS(auth(Routes())) in main.
+func (s *Server) Handler() http.Handler {
+	return s.CORS(s.Routes())
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
