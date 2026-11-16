@@ -1,4 +1,5 @@
 import {
+  SCHEMA_VERSION,
   SYNC_TABLES,
   addOutbox,
   clearOutbox,
@@ -6,6 +7,7 @@ import {
   getAllEntries,
   getAllFoodComponents,
   getAllFoods,
+  getAllWeightGoals,
   getAllWeights,
   getTargets,
   listOutbox,
@@ -221,6 +223,7 @@ async function localTableDocs(table) {
   if (table === "entries") return getAllEntries();
   if (table === "targets") return getTargets();
   if (table === "weights") return getAllWeights();
+  if (table === "weightGoals") return getAllWeightGoals();
   return [];
 }
 
@@ -253,12 +256,13 @@ export async function downloadServerToLocal() {
   const cfg = loadSyncConfig();
   const dump = await api(cfg, "GET", "/v1/dump");
   const payload = {
-    schemaVersion: 3,
+    schemaVersion: SCHEMA_VERSION,
     foods: dump.foods || [],
     foodComponents: dump.foodComponents || [],
     entries: dump.entries || [],
     targets: dump.targets || [],
     weights: dump.weights || [],
+    weightGoals: dump.weightGoals || [],
   };
   if (Array.isArray(dump.categories) && dump.categories.length) payload.categories = dump.categories;
   if (Array.isArray(dump.distribution) && dump.distribution[0]) payload.distribution = dump.distribution[0];

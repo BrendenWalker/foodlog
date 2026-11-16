@@ -1,14 +1,15 @@
 import { localDateKey, todayKey } from "./dates.js";
 
 const DB_NAME = "foodlog";
-const DB_VERSION = 4;
-export const SCHEMA_VERSION = 3;
+const DB_VERSION = 5;
+export const SCHEMA_VERSION = 4;
 export const SYNC_TABLES = Object.freeze([
   "foods",
   "foodComponents",
   "entries",
   "targets",
   "weights",
+  "weightGoals",
   "categories",
   "distribution",
 ]);
@@ -124,6 +125,9 @@ function openDb() {
         if (!db.objectStoreNames.contains("weights")) {
           db.createObjectStore("weights", { keyPath: "dateKey" });
         }
+        if (!db.objectStoreNames.contains("weightGoals")) {
+          db.createObjectStore("weightGoals", { keyPath: "id" });
+        }
         if (!db.objectStoreNames.contains("foodComponents")) {
           const components = db.createObjectStore("foodComponents", { keyPath: "id" });
           components.createIndex("foodId", "foodId");
@@ -175,7 +179,7 @@ function readAll(storeName) {
 }
 
 export function replaceStore(storeName, rows) {
-  if (!["foods", "foodComponents", "entries", "targets", "weights", "outbox"].includes(storeName)) {
+  if (!["foods", "foodComponents", "entries", "targets", "weights", "weightGoals", "outbox"].includes(storeName)) {
     return Promise.reject(new Error("Unknown store."));
   }
   return openDb().then((db) => {
@@ -841,6 +845,47 @@ export function deleteWeight(dateKey) {
   });
 }
 
+export function getAllWeightGoals() {
+  return readAll("weightGoals").then((rows) =>
+    [...rows].sort((a, b) => (a.pounds !== b.pounds ? a.pounds - b.pounds : a.id < b.id ? -1 : 1)),
+  );
+}
+
+export function saveWeightGoal(pounds, id) {
+  const normalized = normalizePounds(pounds);
+  if (normalized == null) return Promise.reject(new Error("That goal weight is not valid."));
+  return getAllWeightGoals().then((goals) => {
+    const existingId = typeof id === "string" && id.trim() !== "" ? id : null;
+    if (goals.some((goal) => goal.pounds === normalized && goal.id !== existingId)) {
+      return Promise.reject(new Error("That goal weight is already on the list."));
+    }
+    const record = {
+      id: existingId || crypto.randomUUID(),
+      pounds: normalized,
+      updatedAt: Date.now(),
+    };
+    return openDb().then((db) => {
+      const tx = db.transaction("weightGoals", "readwrite");
+      tx.objectStore("weightGoals").put(record);
+      return finish(tx, record).then((saved) => {
+        notifyLocalWrite({ table: "weightGoals", op: "put", id: saved.id, doc: saved });
+        return saved;
+      });
+    });
+  });
+}
+
+export function deleteWeightGoal(id) {
+  if (typeof id !== "string" || id.trim() === "") {
+    return Promise.reject(new Error("That goal is not valid."));
+  }
+  return openDb().then((db) => {
+    const tx = db.transaction("weightGoals", "readwrite");
+    tx.objectStore("weightGoals").delete(id);
+    return finish(tx).then(() => notifyLocalWrite({ table: "weightGoals", op: "delete", id }));
+  });
+}
+
 export const LOSS_RATES = [0.5, 1, 1.5, 2, 2.5];
 export const BODY_LIMITS = { ageMin: 15, ageMax: 100, heightMin: 48, heightMax: 96, weightMin: 70, weightMax: 700 };
 
@@ -916,10 +961,11 @@ export async function ensureDefaultTarget(dateKey = todayKey()) {
 export function exportAll() {
   const distribution = loadDistribution();
   const categories = loadCategories();
+  const stores = ["foods", "foodComponents", "entries", "targets", "weights", "weightGoals"];
   return openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const tx = db.transaction(["foods", "foodComponents", "entries", "targets", "weights"], "readonly");
+        const tx = db.transaction(stores, "readonly");
         const result = {
           schemaVersion: SCHEMA_VERSION,
           exportedAt: new Date().toISOString(),
@@ -928,11 +974,12 @@ export function exportAll() {
           entries: null,
           targets: null,
           weights: null,
+          weightGoals: null,
           categories,
           distribution,
         };
-        let pending = 5;
-        for (const name of ["foods", "foodComponents", "entries", "targets", "weights"]) {
+        let pending = stores.length;
+        for (const name of stores) {
           const request = tx.objectStore(name).getAll();
           request.onsuccess = () => {
             result[name] = request.result;
@@ -1183,6 +1230,16 @@ function copyWeight(raw, index) {
   return { dateKey: raw.dateKey, pounds, updatedAt };
 }
 
+function copyWeightGoal(raw, index) {
+  if (!raw || typeof raw !== "object") fail(`Weight goal ${index} is not an object.`);
+  if (typeof raw.id !== "string" || raw.id.trim() === "") fail(`Weight goal ${index} is missing an id.`);
+  const pounds = normalizePounds(raw.pounds);
+  if (pounds == null) fail(`Weight goal ${index} has an invalid weight.`);
+  const updatedAt = raw.updatedAt == null ? Date.now() : raw.updatedAt;
+  if (!isTimestamp(updatedAt)) fail(`Weight goal ${index} has an invalid timestamp.`);
+  return { id: raw.id, pounds, updatedAt };
+}
+
 function copyFoodComponent(raw, index) {
   if (!raw || typeof raw !== "object") fail(`Meal component ${index} is not an object.`);
   if (typeof raw.id !== "string" || raw.id.trim() === "") fail(`Meal component ${index} is missing an id.`);
@@ -1205,7 +1262,12 @@ function copyFoodComponent(raw, index) {
 
 export function validateImport(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) fail("That file is not a backup.");
-  if (data.schemaVersion !== 1 && data.schemaVersion !== 2 && data.schemaVersion !== 3) {
+  if (
+    data.schemaVersion !== 1 &&
+    data.schemaVersion !== 2 &&
+    data.schemaVersion !== 3 &&
+    data.schemaVersion !== 4
+  ) {
     fail("This backup version is not supported.");
   }
   if (!Array.isArray(data.foods) || !Array.isArray(data.entries) || !Array.isArray(data.targets)) {
@@ -1218,6 +1280,14 @@ export function validateImport(data) {
   } else {
     if (!Array.isArray(data.weights)) fail("The backup is missing weigh-ins.");
     weights = data.weights.map((raw, index) => copyWeight(raw, index + 1));
+  }
+  let weightGoals;
+  if (data.schemaVersion === 1 || data.schemaVersion === 2 || data.schemaVersion === 3) {
+    if (Object.hasOwn(data, "weightGoals")) fail("This backup version is not supported.");
+    weightGoals = [];
+  } else {
+    if (!Array.isArray(data.weightGoals)) fail("The backup is missing weight goals.");
+    weightGoals = data.weightGoals.map((raw, index) => copyWeightGoal(raw, index + 1));
   }
   let foodComponents;
   if (data.schemaVersion === 1 || data.schemaVersion === 2) {
@@ -1240,6 +1310,8 @@ export function validateImport(data) {
   requireUnique(entries, (entry) => entry.id, "entry");
   requireUnique(targets, (target) => target.effectiveDate, "calorie target");
   requireUnique(weights, (weight) => weight.dateKey, "weigh-in");
+  requireUnique(weightGoals, (goal) => goal.id, "weight goal");
+  requireUnique(weightGoals, (goal) => goal.pounds, "weight goal pounds");
   requireUnique(foodComponents, (row) => row.id, "meal component");
   const foodIds = new Set(foods.map((food) => food.id));
   const parents = compositeFoodIds(foodComponents);
@@ -1254,7 +1326,7 @@ export function validateImport(data) {
     if (n > MEAL_LINES_MAX) fail(`A meal can include ${MEAL_LINES_MAX} foods.`);
     counts.set(row.foodId, n);
   }
-  const result = { foods, foodComponents, entries, targets, weights };
+  const result = { foods, foodComponents, entries, targets, weights, weightGoals };
   if (categories) result.categories = categories;
   if (Object.hasOwn(data, "distribution")) {
     const distribution = normalizeDistribution(data.distribution);
@@ -1266,22 +1338,26 @@ export function validateImport(data) {
 
 export function replaceAll(data) {
   return openDb().then((db) => {
-    const tx = db.transaction(["foods", "foodComponents", "entries", "targets", "weights"], "readwrite");
+    const storeNames = ["foods", "foodComponents", "entries", "targets", "weights", "weightGoals"];
+    const tx = db.transaction(storeNames, "readwrite");
     const foods = tx.objectStore("foods");
     const foodComponents = tx.objectStore("foodComponents");
     const entries = tx.objectStore("entries");
     const targets = tx.objectStore("targets");
     const weights = tx.objectStore("weights");
+    const weightGoals = tx.objectStore("weightGoals");
     foods.clear();
     foodComponents.clear();
     entries.clear();
     targets.clear();
     weights.clear();
+    weightGoals.clear();
     for (const food of data.foods) foods.put(food);
     for (const row of data.foodComponents || []) foodComponents.put(row);
     for (const entry of data.entries) entries.put(entry);
     for (const target of data.targets) targets.put(target);
     for (const weight of data.weights) weights.put(weight);
+    for (const goal of data.weightGoals || []) weightGoals.put(goal);
     return finish(tx).then(() => {
       saveCategories(data.categories || defaultCategories());
       if (data.distribution) saveDistribution(data.distribution);
@@ -1290,6 +1366,7 @@ export function replaceAll(data) {
       notifyLocalWrite({ table: "entries", op: "replaceAll" });
       notifyLocalWrite({ table: "targets", op: "replaceAll" });
       notifyLocalWrite({ table: "weights", op: "replaceAll" });
+      notifyLocalWrite({ table: "weightGoals", op: "replaceAll" });
     });
   });
 }
@@ -1313,15 +1390,48 @@ function assertImportFails(fn, snippet) {
 function selfCheckImport() {
   const version1 = validateImport({ schemaVersion: 1, foods: [], entries: [], targets: [] });
   assertImport(version1.weights.length === 0, "version 1 has no weigh-ins");
+  assertImport(version1.weightGoals.length === 0, "version 1 has no weight goals");
   assertImport(version1.foodComponents.length === 0, "version 1 has no meal components");
   assertImportFails(
     () => validateImport({ schemaVersion: 1, foods: [], entries: [], targets: [], weights: [] }),
     "not supported",
   );
   assertImportFails(
-    () => validateImport({ schemaVersion: 4, foods: [], entries: [], targets: [], weights: [], foodComponents: [] }),
+    () =>
+      validateImport({
+        schemaVersion: 5,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [],
+        foodComponents: [],
+        weightGoals: [],
+      }),
     "not supported",
   );
+  assertImportFails(
+    () =>
+      validateImport({
+        schemaVersion: 3,
+        foods: [],
+        entries: [],
+        targets: [],
+        weights: [],
+        foodComponents: [],
+        weightGoals: [],
+      }),
+    "not supported",
+  );
+  const version4 = validateImport({
+    schemaVersion: 4,
+    foods: [],
+    entries: [],
+    targets: [],
+    weights: [],
+    foodComponents: [],
+    weightGoals: [{ id: "g1", pounds: 180, updatedAt: 1 }],
+  });
+  assertImport(version4.weightGoals[0].pounds === 180, "version 4 weight goal");
   assertImportFails(
     () => validateImport({ schemaVersion: 2, foods: [], entries: [], targets: [] }),
     "missing weigh-ins",
@@ -1346,6 +1456,7 @@ function selfCheckImport() {
     weights: [{ dateKey: "2020-01-01", pounds: 180.5, updatedAt: 1 }],
   });
   assertImport(version2.weights[0].pounds === 180.5, "version 2 weigh-in");
+  assertImport(version2.weightGoals.length === 0, "version 2 has no weight goals");
   assertImport(version2.foodComponents.length === 0, "version 2 has no meal components");
   assertImport(version2.distribution == null, "missing distribution stays unset");
   assertImportFails(

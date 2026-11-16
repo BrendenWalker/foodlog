@@ -57,6 +57,43 @@ export function totalLoss(series) {
   return { loss: first.trend - last.trend, days };
 }
 
+// weeklyRate is pounds lost (positive = down). Green when loss rate meets or beats the target.
+export function rateMeetsTarget(rate, lbPerWeek) {
+  if (rate == null || lbPerWeek == null || !Number.isFinite(rate) || !Number.isFinite(lbPerWeek)) {
+    return null;
+  }
+  return rate >= lbPerWeek;
+}
+
+// Goal progress from first weigh-in. Achieved on the first trend point that reaches
+// the target; relapsed if the trend later crosses back the other way.
+export function goalProgress(series, targetPounds) {
+  if (!series.length || typeof targetPounds !== "number" || !Number.isFinite(targetPounds)) {
+    return { state: "pending", achievedOn: null, days: null };
+  }
+  const start = series[0];
+  if (start.trend === targetPounds) {
+    return { state: "achieved", achievedOn: start.dateKey, days: 0 };
+  }
+  const lossGoal = targetPounds < start.trend;
+  let achievedOn = null;
+  for (const point of series) {
+    const met = lossGoal ? point.trend <= targetPounds : point.trend >= targetPounds;
+    if (met) {
+      achievedOn = point.dateKey;
+      break;
+    }
+  }
+  if (!achievedOn) return { state: "pending", achievedOn: null, days: null };
+  const last = series[series.length - 1];
+  const held = lossGoal ? last.trend <= targetPounds : last.trend >= targetPounds;
+  return {
+    state: held ? "achieved" : "relapsed",
+    achievedOn,
+    days: calendarDaysBetween(start.dateKey, achievedOn),
+  };
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(`weight: ${message}`);
 }
@@ -110,6 +147,46 @@ function selfCheck() {
   assertClose(overall.loss, 0.29, "total trend loss since first weigh-in");
   assert(overall.days === 2, "total span is calendar days");
   assert(totalLoss(trendSeries([{ dateKey: "2026-10-08", pounds: 200 }])) === null, "one weigh-in has no total");
+
+  assert(rateMeetsTarget(1, 1) === true, "exact rate is green");
+  assert(rateMeetsTarget(1.2, 1) === true, "faster loss is green");
+  assert(rateMeetsTarget(0.4, 1) === false, "slower loss is red");
+  assert(rateMeetsTarget(-0.2, 1) === false, "gain is red");
+  assert(rateMeetsTarget(null, 1) === null, "missing rate");
+  assert(rateMeetsTarget(1, null) === null, "missing target");
+
+  const down = trendSeries([
+    { dateKey: "2026-01-01", pounds: 200 },
+    { dateKey: "2026-01-08", pounds: 190 },
+    { dateKey: "2026-01-15", pounds: 185 },
+    { dateKey: "2026-01-22", pounds: 210 },
+  ]);
+  // trends: 200, 199, 197.6, 198.84 — never reaches 190 as trend
+  const pending = goalProgress(down, 190);
+  assert(pending.state === "pending", "high target stays pending while trend is above");
+
+  const reach = trendSeries([
+    { dateKey: "2026-01-01", pounds: 200 },
+    { dateKey: "2026-01-02", pounds: 100 },
+  ]);
+  // trends: 200, 190
+  const hit = goalProgress(reach, 190);
+  assert(hit.state === "achieved", "trend reach is achieved");
+  assert(hit.achievedOn === "2026-01-02", "achieved on cross day");
+  assert(hit.days === 1, "days from first weigh-in");
+
+  const bounce = trendSeries([
+    { dateKey: "2026-01-01", pounds: 200 },
+    { dateKey: "2026-01-02", pounds: 100 },
+    { dateKey: "2026-01-03", pounds: 300 },
+  ]);
+  // trends: 200, 190, 201
+  const lost = goalProgress(bounce, 190);
+  assert(lost.state === "relapsed", "crossing back is relapsed");
+  assert(lost.achievedOn === "2026-01-02", "keeps first achieve date");
+
+  const already = goalProgress(trendSeries([{ dateKey: "2026-01-01", pounds: 180 }]), 180);
+  assert(already.state === "achieved" && already.days === 0, "start at target");
 }
 
 selfCheck();

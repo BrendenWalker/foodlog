@@ -545,6 +545,32 @@ legend {
   width: 8rem;
 }
 
+.weight-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin: 16px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.weight-tabs button {
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+}
+
+.weight-tabs button[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--accent);
+}
+
 .weight-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -560,12 +586,77 @@ legend {
   font-variant-numeric: tabular-nums;
 }
 
+.weight-rate.good {
+  color: var(--accent);
+}
+
+.weight-rate.bad {
+  color: var(--over);
+}
+
 .weight-stats .hint {
   margin: 2px 0 0;
 }
 
 #weight-total {
-  margin: 6px 0 0;
+  margin: 10px 0 6px;
+  font-size: 1rem;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.weight-goals .goal-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 0;
+  text-align: left;
+}
+
+.weight-goals .goal-check {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.weight-goals .goal-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.weight-goals .goal-title {
+  display: block;
+  font-weight: 650;
+}
+
+.weight-goals .goal-meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.weight-goals .goal-relapsed .goal-title,
+.weight-goals .goal-relapsed .goal-meta {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.weight-history {
+  max-height: min(50vh, 360px);
+  overflow: auto;
+  margin: 0;
+  padding-right: 2px;
+}
+
+.weight-history .day-row[aria-current="true"] {
+  color: var(--accent);
+}
+
+.weight-history .day-row[aria-current="true"] .day-meta {
+  color: var(--accent);
 }
 
 .weight-chart {

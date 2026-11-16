@@ -1,4 +1,4 @@
-import { dateFromKey, groupEntriesByDay, targetFor, targetRecordFor, todayKey } from "./dates.js";
+import { dateFromKey, targetFor, targetRecordFor, todayKey } from "./dates.js";
 import {
   bindSyncLifecycle,
   downloadServerToLocal,
@@ -24,6 +24,7 @@ import {
   deleteEntry,
   deleteFood,
   deleteWeight,
+  deleteWeightGoal,
   ensureDefaultTarget,
   exportAll,
   loadCategories,
@@ -39,8 +40,8 @@ import {
   getComponentsByFoodId,
   gramsInServing,
   scaleByGrams,
-  getAllEntries,
   getAllFoods,
+  getAllWeightGoals,
   getAllWeights,
   getEntriesByDate,
   getRecentFoods,
@@ -60,35 +61,36 @@ import {
   saveFood,
   saveFoodWithComponents,
   saveWeight,
+  saveWeightGoal,
   scaleServing,
   servingText,
   setTarget,
   validProfile,
   validateImport,
 } from "./db.js";
-import { totalLoss, trendSeries, weeklyRate } from "./weight.js";
+import { goalProgress, rateMeetsTarget, totalLoss, trendSeries, weeklyRate } from "./weight.js";
 
 const TITLES = {
   today: "Today",
   meal: "Meal",
-  history: "History",
   weight: "Weight",
   library: "Library",
   settings: "Settings",
   categories: "Categories",
   select: "Add from Library",
   calories: "Calories",
+  goals: "Goals",
   distribution: "Distribution",
   sync: "Sync",
   import: "Import/Export",
 };
 
 const PARENT = {
-  day: "history",
   "food-form": "library",
   select: "today",
   serve: "select",
   calories: "settings",
+  goals: "settings",
   distribution: "settings",
   categories: "settings",
   sync: "settings",
@@ -104,7 +106,7 @@ let editingCategoryId = null;
 let deletingCategoryId = null;
 let categoryMovePending = false;
 let editingId = null;
-let selectedDateKey = null;
+let weightTab = "progress";
 let undoEntry = null;
 let undoTimer = 0;
 let settingsTarget = null;
@@ -141,21 +143,6 @@ function formatDayLong(dateKey) {
     day: "numeric",
     year: "numeric",
   });
-}
-
-function difference(consumed, target) {
-  if (target == null) return null;
-  if (consumed > target) return { kind: "over", amount: consumed - target };
-  if (consumed < target) return { kind: "under", amount: target - consumed };
-  return { kind: "even", amount: 0 };
-}
-
-function differenceText(consumed, target) {
-  const diff = difference(consumed, target);
-  if (!diff) return "";
-  if (diff.kind === "over") return `${formatNum(diff.amount)} over`;
-  if (diff.kind === "under") return `${formatNum(diff.amount)} under`;
-  return "on target";
 }
 
 function el(tag, className, text) {
@@ -437,55 +424,85 @@ async function renderToday() {
   setError("today-error", "");
 }
 
-async function renderHistory() {
-  const [entries, targets] = await Promise.all([getAllEntries(), getTargets()]);
-  const days = groupEntriesByDay(entries);
-  const nodes = days.map((day) => {
-    const button = el("button", "day-row");
-    button.type = "button";
-    const copy = el("span", "day-copy");
-    const meta = el("span", "day-meta");
-    const target = targetFor(day.dateKey, targets);
-    const diff = differenceText(day.consumed, target);
-    meta.textContent = target == null ? `${formatNum(day.consumed)} kcal` : `${formatNum(day.consumed)} kcal · ${formatNum(target)} target · ${diff}`;
-    copy.append(el("span", "day-date", formatDayLabel(day.dateKey)), meta);
-    button.append(copy);
-    button.addEventListener("click", () => openDay(day.dateKey));
-    const li = el("li");
-    li.append(button);
+function paintRate(el, rate, lbPerWeek) {
+  el.textContent = formatRate(rate);
+  el.classList.remove("good", "bad");
+  const meet = rateMeetsTarget(rate, lbPerWeek);
+  if (meet === true) el.classList.add("good");
+  else if (meet === false) el.classList.add("bad");
+}
+
+function showWeightTab(name) {
+  weightTab = name === "history" ? "history" : "progress";
+  const progress = weightTab === "progress";
+  $("weight-tab-progress").setAttribute("aria-selected", progress ? "true" : "false");
+  $("weight-tab-history").setAttribute("aria-selected", progress ? "false" : "true");
+  $("weight-panel-progress").hidden = !progress;
+  $("weight-panel-history").hidden = progress;
+}
+
+function goalRow(goal, series) {
+  const progress = goalProgress(series, goal.pounds);
+  const li = el("li");
+  const row = el("div", `goal-row${progress.state === "relapsed" ? " goal-relapsed" : ""}`);
+  const check = el("span", "goal-check", progress.state === "achieved" ? "✓" : "");
+  check.setAttribute("aria-hidden", progress.state === "achieved" ? "false" : "true");
+  const copy = el("span", "goal-copy");
+  copy.append(el("span", "goal-title", `${formatPounds(goal.pounds)} lb`));
+  if (progress.state === "achieved" || progress.state === "relapsed") {
+    const dayLabel = progress.days === 1 ? "day" : "days";
+    copy.append(
+      el(
+        "span",
+        "goal-meta",
+        `Reached ${formatDayLabel(progress.achievedOn)} · ${progress.days} ${dayLabel}`,
+      ),
+    );
+  } else {
+    copy.append(el("span", "goal-meta", "Not reached yet"));
+  }
+  row.append(check, copy);
+  li.append(row);
+  return li;
+}
+
+async function renderGoals() {
+  const goals = await getAllWeightGoals();
+  setError("goal-pounds-error", "");
+  const nodes = goals.map((goal) => {
+    const li = el("li", "row");
+    li.append(el("span", "row-name", `${formatPounds(goal.pounds)} lb`));
+    const remove = el("button", "remove-btn", "Remove");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${formatPounds(goal.pounds)} lb goal`);
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Remove the ${formatPounds(goal.pounds)} lb goal?`)) return;
+      try {
+        await deleteWeightGoal(goal.id);
+        await renderGoals();
+      } catch (error) {
+        console.error(error);
+        setError("goal-pounds-error", "Could not remove that goal.");
+      }
+    });
+    li.append(remove);
     return li;
   });
-  setList("history-list", "history-empty", nodes, "No history yet.");
+  setList("goal-list", "goal-empty", nodes, "No goals yet.");
 }
 
-async function renderDay() {
-  const dateKey = selectedDateKey;
-  const [entries, targets] = await Promise.all([getEntriesByDate(dateKey), getTargets()]);
-  if (entries.length === 0) {
-    show("history");
-    await renderHistory();
-    return;
+async function onSaveGoal(event) {
+  event.preventDefault();
+  const pounds = parsePounds($("goal-pounds").value);
+  setError("goal-pounds-error", pounds == null ? "Enter a weight from 70 to 700 lb, with at most one decimal." : "");
+  if (pounds == null) return;
+  try {
+    await saveWeightGoal(pounds);
+    $("goal-pounds").value = "";
+    await renderGoals();
+  } catch (error) {
+    setError("goal-pounds-error", error.message || "Could not save that goal.");
   }
-  $("day-entries").replaceChildren(...entries.map(entryRow));
-  const consumed = entries.reduce((sum, entry) => sum + entry.calories, 0);
-  const target = targetFor(dateKey, targets);
-  const summary = $("day-summary");
-  summary.replaceChildren();
-  summary.append(summaryRow("Total", `${formatNum(consumed)} kcal`, true));
-  if (target != null) {
-    const diff = difference(consumed, target);
-    summary.append(summaryRow("Target", `${formatNum(target)} kcal`, false));
-    if (diff.kind === "over") summary.append(summaryRow("Over", `${formatNum(diff.amount)} kcal`, false, true));
-    else if (diff.kind === "under") summary.append(summaryRow("Under", `${formatNum(diff.amount)} kcal`, false));
-    else summary.append(summaryRow("Difference", "On target", false));
-  }
-}
-
-function summaryRow(label, value, strong, over) {
-  const row = el("div", over ? "summary-row over" : "summary-row");
-  const tag = strong ? "strong" : "span";
-  row.append(el(tag, "", label), el(tag, "", value));
-  return row;
 }
 
 function renderLibraryList() {
@@ -777,8 +794,6 @@ async function onSyncDownload() {
 
 async function refresh() {
   if (view === "today") await renderToday();
-  else if (view === "history") await renderHistory();
-  else if (view === "day") await renderDay();
   else if (view === "weight") await renderWeight();
   else if (view === "meal") {
     await renderMeal();
@@ -790,6 +805,7 @@ async function refresh() {
     await refreshStatus();
   } else if (view === "serve") await refreshStatus();
   else if (view === "calories") await renderSettings();
+  else if (view === "goals") await renderGoals();
   else if (view === "distribution") renderDistribution();
   else if (view === "categories") await renderCategories();
   else if (view === "sync") renderSync();
@@ -928,25 +944,37 @@ function paintWeightChart(series) {
 }
 
 async function renderWeight() {
-  const logs = await getAllWeights();
+  const [logs, goals, targets] = await Promise.all([getAllWeights(), getAllWeightGoals(), getTargets()]);
   const dateInput = $("weight-date");
   dateInput.max = todayKey();
   if (!dateInput.value || dateInput.value > todayKey()) dateInput.value = todayKey();
   setError("weight-date-error", "");
   setError("weight-pounds-error", "");
   applyWeightSelection(logs);
+  showWeightTab(weightTab);
   const series = trendSeries(logs);
-  $("weight-week").textContent = formatRate(weeklyRate(series, 7));
-  $("weight-month").textContent = formatRate(weeklyRate(series, 30));
+  const profile = targetRecordFor(todayKey(), targets);
+  const lbPerWeek = profile && typeof profile.lbPerWeek === "number" ? profile.lbPerWeek : null;
+  paintRate($("weight-week"), weeklyRate(series, 7), lbPerWeek);
+  paintRate($("weight-month"), weeklyRate(series, 30), lbPerWeek);
   const total = totalLoss(series);
   const totalEl = $("weight-total");
   totalEl.hidden = total == null;
   totalEl.textContent = total == null ? "" : formatTotal(total);
   paintWeightChart(series);
+  setList(
+    "weight-goals",
+    "weight-goals-empty",
+    goals.map((goal) => goalRow(goal, series)),
+    "No goals yet. Add them in Settings.",
+  );
+  const selected = dateInput.value;
   const newest = [...logs].sort((a, b) => (a.dateKey < b.dateKey ? 1 : a.dateKey > b.dateKey ? -1 : 0));
   const nodes = newest.map((row) => {
     const button = el("button", "day-row");
     button.type = "button";
+    button.dataset.dateKey = row.dateKey;
+    if (row.dateKey === selected) button.setAttribute("aria-current", "true");
     const copy = el("span", "day-copy");
     copy.append(el("span", "day-date", formatDayLabel(row.dateKey)), el("span", "day-meta", `${formatPounds(row.pounds)} lb`));
     button.append(copy);
@@ -955,6 +983,10 @@ async function renderWeight() {
       applyWeightSelection(logs);
       setError("weight-date-error", "");
       setError("weight-pounds-error", "");
+      for (const node of $("weight-list").querySelectorAll(".day-row")) {
+        if (node === button) node.setAttribute("aria-current", "true");
+        else node.removeAttribute("aria-current");
+      }
     });
     const li = el("li");
     li.append(button);
@@ -966,7 +998,13 @@ async function renderWeight() {
 async function onWeightDateChange() {
   setError("weight-date-error", "");
   setError("weight-pounds-error", "");
-  applyWeightSelection(await getAllWeights());
+  const logs = await getAllWeights();
+  applyWeightSelection(logs);
+  const selected = $("weight-date").value;
+  for (const button of $("weight-list").querySelectorAll(".day-row")) {
+    if (button.dataset.dateKey === selected) button.setAttribute("aria-current", "true");
+    else button.removeAttribute("aria-current");
+  }
 }
 
 async function onSaveWeight(event) {
@@ -981,8 +1019,6 @@ async function onSaveWeight(event) {
   try {
     await saveWeight(dateKey, pounds);
     await renderWeight();
-    $("weight-pounds").value = "";
-    $("delete-weight").hidden = true;
     setError("weight-saved", "Saved.");
   } catch (error) {
     console.error(error);
@@ -1140,12 +1176,6 @@ async function openSelect() {
   show("select");
   renderSelectList();
   await refreshStatus();
-}
-
-async function openDay(dateKey) {
-  selectedDateKey = dateKey;
-  show("day", formatDayLong(dateKey));
-  await renderDay();
 }
 
 function openFoodForm(food) {
@@ -2124,6 +2154,9 @@ function bind() {
   $("weight-form").addEventListener("submit", onSaveWeight);
   $("weight-date").addEventListener("change", onWeightDateChange);
   $("delete-weight").addEventListener("click", onDeleteWeight);
+  $("weight-tab-progress").addEventListener("click", () => showWeightTab("progress"));
+  $("weight-tab-history").addEventListener("click", () => showWeightTab("history"));
+  $("goal-form").addEventListener("submit", onSaveGoal);
   $("export-btn").addEventListener("click", onExport);
   $("import-btn").addEventListener("click", () => $("import-file").click());
   $("import-file").addEventListener("change", onImportFile);

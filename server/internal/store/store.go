@@ -15,6 +15,7 @@ var Tables = []string{
 	"entries",
 	"targets",
 	"weights",
+	"weightGoals",
 	"categories",
 	"distribution",
 }
