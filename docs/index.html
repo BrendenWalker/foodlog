@@ -246,47 +246,58 @@
       <section id="view-calories" data-view="calories" hidden>
         <form id="target-form">
           <fieldset>
-            <legend>Sex</legend>
+            <legend>Target</legend>
             <div class="choice-row">
-              <label class="choice"><input type="radio" name="sex" value="male" />Male</label>
-              <label class="choice"><input type="radio" name="sex" value="female" />Female</label>
+              <label class="choice"><input type="radio" name="target-mode" value="manual" />Manual</label>
+              <label class="choice"><input type="radio" name="target-mode" value="calculated" />Calculated</label>
             </div>
           </fieldset>
-          <p id="sex-error" class="error" hidden></p>
+          <p id="mode-error" class="error" hidden></p>
 
-          <label for="age-input">Age</label>
-          <input id="age-input" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
-          <p id="age-error" class="error" hidden></p>
-
-          <label for="height-ft">Height</label>
-          <div class="inline-field">
-            <input id="height-ft" inputmode="numeric" autocomplete="off" enterkeyhint="next" aria-label="Feet" />
-            <span>ft</span>
-            <input id="height-in" inputmode="numeric" autocomplete="off" enterkeyhint="next" aria-label="Inches" />
-            <span>in</span>
+          <div id="target-manual">
+            <label for="manual-calories">Calories</label>
+            <input id="manual-calories" inputmode="numeric" autocomplete="off" enterkeyhint="done" />
+            <p id="manual-calories-error" class="error" hidden></p>
           </div>
-          <p id="height-error" class="error" hidden></p>
 
-          <label for="weight-input">Weight</label>
-          <div class="inline-field">
-            <input id="weight-input" inputmode="decimal" autocomplete="off" enterkeyhint="done" />
-            <span>lb</span>
+          <div id="target-calculated" hidden>
+            <fieldset>
+              <legend>Sex</legend>
+              <div class="choice-row">
+                <label class="choice"><input type="radio" name="sex" value="male" />Male</label>
+                <label class="choice"><input type="radio" name="sex" value="female" />Female</label>
+              </div>
+            </fieldset>
+            <p id="sex-error" class="error" hidden></p>
+
+            <label for="age-input">Age</label>
+            <input id="age-input" inputmode="numeric" autocomplete="off" enterkeyhint="next" />
+            <p id="age-error" class="error" hidden></p>
+
+            <label for="height-ft">Height</label>
+            <div class="inline-field">
+              <input id="height-ft" inputmode="numeric" autocomplete="off" enterkeyhint="next" aria-label="Feet" />
+              <span>ft</span>
+              <input id="height-in" inputmode="numeric" autocomplete="off" enterkeyhint="next" aria-label="Inches" />
+              <span>in</span>
+            </div>
+            <p id="height-error" class="error" hidden></p>
+
+            <label for="activity-input">Activity</label>
+            <select id="activity-input"></select>
+            <p id="activity-error" class="error" hidden></p>
+
+            <fieldset>
+              <legend>Pounds per week</legend>
+              <div id="rate-row" class="rate-row"></div>
+            </fieldset>
+            <p id="rate-error" class="error" hidden></p>
+
+            <p id="target-preview"></p>
+            <p id="target-hint" class="hint" hidden>Uses your current weight trend. Mifflin–St Jeor times activity level, minus 500 kcal for each pound per week.</p>
+            <p id="target-error" class="error" hidden></p>
           </div>
-          <p id="weight-error" class="error" hidden></p>
 
-          <label for="activity-input">Activity</label>
-          <select id="activity-input"></select>
-          <p id="activity-error" class="error" hidden></p>
-
-          <fieldset>
-            <legend>Pounds per week</legend>
-            <div id="rate-row" class="rate-row"></div>
-          </fieldset>
-          <p id="rate-error" class="error" hidden></p>
-
-          <p id="target-preview"></p>
-          <p id="target-hint" class="hint" hidden>Mifflin–St Jeor times activity level, minus 500 kcal for each pound per week.</p>
-          <p id="target-error" class="error" hidden></p>
           <button type="submit" class="wide">Save</button>
         </form>
       </section>

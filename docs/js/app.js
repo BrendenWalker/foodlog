@@ -64,11 +64,21 @@ import {
   saveWeightGoal,
   scaleServing,
   servingText,
+  profileFromTarget,
   setTarget,
+  targetMode,
   validProfile,
   validateImport,
 } from "./db.js";
-import { goalProgress, rateMeetsTarget, totalLoss, trendSeries, weeklyRate } from "./weight.js";
+import {
+  goalProgress,
+  latestTrend,
+  progressGoals,
+  rateMeetsTarget,
+  totalLoss,
+  trendSeries,
+  weeklyRate,
+} from "./weight.js";
 
 const TITLES = {
   today: "Today",
@@ -111,6 +121,7 @@ let undoEntry = null;
 let undoTimer = 0;
 let settingsTarget = null;
 let settingsTried = false;
+let settingsTrendLb = null;
 let servingFood = null;
 let mealDraft = null;
 let mealSession = null;
@@ -572,12 +583,15 @@ function parseInches(raw) {
   return value;
 }
 
-function parseWeightLb(raw) {
-  const text = String(raw ?? "").trim();
-  if (!/^\d+(\.\d+)?$/.test(text) || /^0\d/.test(text)) return null;
-  const value = Number(text);
-  if (!Number.isFinite(value) || value < BODY_LIMITS.weightMin || value > BODY_LIMITS.weightMax) return null;
-  return value;
+function readTargetMode() {
+  const mode = checkedValue("target-mode");
+  return mode === "calculated" ? "calculated" : mode === "manual" ? "manual" : "";
+}
+
+function applyTargetModeUi(mode) {
+  const calculated = mode === "calculated";
+  $("target-manual").hidden = calculated;
+  $("target-calculated").hidden = !calculated;
 }
 
 function readProfile() {
@@ -585,7 +599,6 @@ function readProfile() {
   const age = parsePositiveInt($("age-input").value);
   const feet = parsePositiveInt($("height-ft").value);
   const inches = parseInches($("height-in").value);
-  const weightLb = parseWeightLb($("weight-input").value);
   const rateRaw = checkedValue("lb-per-week");
   const lbPerWeek = rateRaw && LOSS_RATES.includes(Number(rateRaw)) ? Number(rateRaw) : null;
   const activity = $("activity-input").value;
@@ -595,15 +608,14 @@ function readProfile() {
   const heightOk =
     heightIn != null && heightIn >= BODY_LIMITS.heightMin && heightIn <= BODY_LIMITS.heightMax && inches <= 11;
   const activityOk = activityFactor(activity) != null;
-  const value = { sex, age, heightIn, weightLb, lbPerWeek, activity };
+  const value = { sex, age, heightIn, lbPerWeek, activity };
   return {
-    ok: sexOk && ageOk && heightOk && weightLb != null && lbPerWeek != null && activityOk && validProfile(value),
+    ok: sexOk && ageOk && heightOk && lbPerWeek != null && activityOk && validProfile(value),
     value,
     errors: {
       sex: sexOk ? "" : "Select male or female.",
       age: ageOk ? "" : `Age must be ${BODY_LIMITS.ageMin} to ${BODY_LIMITS.ageMax}.`,
       height: heightOk ? "" : "Height must be 4 ft 0 in to 8 ft 0 in.",
-      weight: weightLb != null ? "" : `Weight must be ${BODY_LIMITS.weightMin} to ${BODY_LIMITS.weightMax} lb.`,
       activity: activityOk ? "" : "Select an activity level.",
       rate: lbPerWeek != null ? "" : "Select pounds per week.",
     },
@@ -611,20 +623,29 @@ function readProfile() {
 }
 
 function showProfileErrors(errors) {
-  setError("sex-error", errors.sex);
-  setError("age-error", errors.age);
-  setError("height-error", errors.height);
-  setError("weight-error", errors.weight);
-  setError("activity-error", errors.activity);
-  setError("rate-error", errors.rate);
+  setError("sex-error", errors.sex || "");
+  setError("age-error", errors.age || "");
+  setError("height-error", errors.height || "");
+  setError("activity-error", errors.activity || "");
+  setError("rate-error", errors.rate || "");
 }
 
-function clearProfileErrors() {
-  showProfileErrors({ sex: "", age: "", height: "", weight: "", activity: "", rate: "" });
+function clearTargetErrors() {
+  setError("mode-error", "");
+  setError("manual-calories-error", "");
+  showProfileErrors({ sex: "", age: "", height: "", activity: "", rate: "" });
   setError("target-error", "");
 }
 
-function fillProfile(record) {
+function fillTargetForm(record) {
+  const mode = targetMode(record) || "manual";
+  for (const input of $("target-form").querySelectorAll('input[name="target-mode"]')) {
+    input.checked = input.value === mode;
+  }
+  applyTargetModeUi(mode);
+  $("manual-calories").value =
+    record && mode === "manual" && Number.isInteger(record.calories) ? String(record.calories) : "";
+
   const sex = record && (record.sex === "male" || record.sex === "female") ? record.sex : "";
   for (const input of $("target-form").querySelectorAll('input[name="sex"]')) {
     input.checked = input.value === sex;
@@ -637,7 +658,6 @@ function fillProfile(record) {
     $("height-ft").value = "";
     $("height-in").value = "";
   }
-  $("weight-input").value = record && typeof record.weightLb === "number" ? String(record.weightLb) : "";
   const activity = record && activityFactor(record.activity) != null ? record.activity : "sedentary";
   $("activity-input").value = activity;
   for (const input of $("target-form").querySelectorAll('input[name="lb-per-week"]')) {
@@ -645,19 +665,30 @@ function fillProfile(record) {
   }
 }
 
+function trendWeightOk(trendLb) {
+  return typeof trendLb === "number" && Number.isFinite(trendLb) && trendLb >= BODY_LIMITS.weightMin && trendLb <= BODY_LIMITS.weightMax;
+}
+
 function paintPreview() {
-  const profile = readProfile();
   const preview = $("target-preview");
   const hint = $("target-hint");
-  if (!profile.ok) {
-    const current = settingsTarget && settingsTarget.calories;
-    preview.textContent = current ? `Current target: ${formatNum(current)} kcal` : "";
-    preview.classList.toggle("is-current", Boolean(current));
+  if (readTargetMode() !== "calculated") {
+    preview.textContent = "";
     hint.hidden = true;
     setError("target-error", "");
     return;
   }
-  const calories = dailyTargetCalories(profile.value);
+  const profile = readProfile();
+  if (!profile.ok || !trendWeightOk(settingsTrendLb)) {
+    const current = settingsTarget && settingsTarget.calories;
+    preview.textContent = current ? `Current target: ${formatNum(current)} kcal` : "";
+    preview.classList.toggle("is-current", Boolean(current));
+    hint.hidden = true;
+    if (!profile.ok) setError("target-error", "");
+    else setError("target-error", "Log a weight on the Weight page first.");
+    return;
+  }
+  const calories = dailyTargetCalories({ ...profile.value, weightLb: settingsTrendLb });
   const floor = calorieFloor(profile.value.sex);
   preview.textContent = `Eat ${formatNum(calories)} kcal / day`;
   preview.classList.remove("is-current");
@@ -670,19 +701,63 @@ function paintPreview() {
 
 function onProfileInput() {
   setSettingsMsg("");
-  if (settingsTried) showProfileErrors(readProfile().errors);
+  const mode = readTargetMode();
+  applyTargetModeUi(mode);
+  if (
+    mode === "manual" &&
+    !$("manual-calories").value.trim() &&
+    settingsTarget &&
+    Number.isInteger(settingsTarget.calories)
+  ) {
+    $("manual-calories").value = String(settingsTarget.calories);
+  }
+  if (settingsTried) {
+    if (mode === "manual") {
+      const calories = parsePositiveInt($("manual-calories").value);
+      setError("mode-error", "");
+      setError("manual-calories-error", calories == null ? "Calories must be a positive whole number." : "");
+      showProfileErrors({ sex: "", age: "", height: "", activity: "", rate: "" });
+    } else if (mode === "calculated") {
+      setError("mode-error", "");
+      setError("manual-calories-error", "");
+      showProfileErrors(readProfile().errors);
+    } else {
+      setError("mode-error", "Select manual or calculated.");
+    }
+  }
   paintPreview();
 }
 
 async function renderSettings() {
-  const targets = await getTargets();
+  const [targets, logs] = await Promise.all([getTargets(), getAllWeights()]);
   settingsTarget = targetRecordFor(todayKey(), targets);
+  settingsTrendLb = latestTrend(logs);
   if (!$("target-form").contains(document.activeElement)) {
     settingsTried = false;
-    fillProfile(settingsTarget);
-    clearProfileErrors();
+    fillTargetForm(settingsTarget);
+    clearTargetErrors();
+  } else {
+    applyTargetModeUi(readTargetMode() || targetMode(settingsTarget) || "manual");
   }
   paintPreview();
+}
+
+async function refreshCalculatedTargetIfNeeded() {
+  try {
+    const [targets, logs] = await Promise.all([getTargets(), getAllWeights()]);
+    const current = targetRecordFor(todayKey(), targets);
+    if (targetMode(current) !== "calculated") return;
+    const profile = profileFromTarget(current);
+    if (!profile) return;
+    const trendLb = latestTrend(logs);
+    if (!trendWeightOk(trendLb)) return;
+    const calories = dailyTargetCalories({ ...profile, weightLb: trendLb });
+    if (calories < calorieFloor(profile.sex)) return;
+    if (current && current.calories === calories) return;
+    await setTarget(todayKey(), calories, profile, "calculated");
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 async function paintSyncStatus() {
@@ -965,7 +1040,7 @@ async function renderWeight() {
   setList(
     "weight-goals",
     "weight-goals-empty",
-    goals.map((goal) => goalRow(goal, series)),
+    progressGoals(goals, series).map((goal) => goalRow(goal, series)),
     "No goals yet. Add them in Settings.",
   );
   const selected = dateInput.value;
@@ -1018,6 +1093,7 @@ async function onSaveWeight(event) {
   if (!dateOk || pounds == null) return;
   try {
     await saveWeight(dateKey, pounds);
+    await refreshCalculatedTargetIfNeeded();
     await renderWeight();
     setError("weight-saved", "Saved.");
   } catch (error) {
@@ -1032,6 +1108,7 @@ async function onDeleteWeight() {
   if (!confirm(`Delete the weigh-in for ${formatDayLong(dateKey)}?`)) return;
   await deleteWeight(dateKey);
   $("weight-pounds").value = "";
+  await refreshCalculatedTargetIfNeeded();
   await renderWeight();
 }
 
@@ -1321,15 +1398,36 @@ function onSaveDistribution(event) {
 async function onSaveTarget(event) {
   event.preventDefault();
   settingsTried = true;
+  const mode = readTargetMode();
+  clearTargetErrors();
+  if (mode !== "manual" && mode !== "calculated") {
+    setError("mode-error", "Select manual or calculated.");
+    return;
+  }
+  applyTargetModeUi(mode);
+  if (mode === "manual") {
+    const calories = parsePositiveInt($("manual-calories").value);
+    setError("manual-calories-error", calories == null ? "Calories must be a positive whole number." : "");
+    if (calories == null) return;
+    await setTarget(todayKey(), calories, null, "manual");
+    settingsTarget = { effectiveDate: todayKey(), calories, mode: "manual" };
+    settingsTried = false;
+    setSettingsMsg("Saved.");
+    return;
+  }
   const profile = readProfile();
   showProfileErrors(profile.errors);
   paintPreview();
   if (!profile.ok) return;
-  const calories = dailyTargetCalories(profile.value);
+  if (!trendWeightOk(settingsTrendLb)) {
+    setError("target-error", "Log a weight on the Weight page first.");
+    return;
+  }
+  const calories = dailyTargetCalories({ ...profile.value, weightLb: settingsTrendLb });
   const floor = calorieFloor(profile.value.sex);
   if (calories < floor) return;
-  await setTarget(todayKey(), calories, profile.value);
-  settingsTarget = { effectiveDate: todayKey(), calories, ...profile.value };
+  await setTarget(todayKey(), calories, profile.value, "calculated");
+  settingsTarget = { effectiveDate: todayKey(), calories, mode: "calculated", ...profile.value };
   settingsTried = false;
   setSettingsMsg("Saved.");
 }
@@ -1395,11 +1493,12 @@ async function onImportFile(event) {
     await replaceAll(clean);
     categories = loadCategories();
     fillCategorySelect();
-    const targets = await ensureDefaultTarget(todayKey());
+    const [targets, logs] = await Promise.all([ensureDefaultTarget(todayKey()), getAllWeights()]);
     settingsTarget = targetRecordFor(todayKey(), targets);
+    settingsTrendLb = latestTrend(logs);
     settingsTried = false;
-    fillProfile(settingsTarget);
-    clearProfileErrors();
+    fillTargetForm(settingsTarget);
+    clearTargetErrors();
     paintPreview();
     setSettingsMsg("Backup restored.");
   } catch (error) {

@@ -30,6 +30,12 @@ export function trendSeries(logs) {
   });
 }
 
+// Latest trend pounds, or null when there are no weigh-ins.
+export function latestTrend(logs) {
+  const series = trendSeries(logs);
+  return series.length ? series[series.length - 1].trend : null;
+}
+
 // Null until some weigh-in is on or before the start of the window.
 // The window ends on the latest weigh-in, not on today.
 export function weeklyRate(series, windowDays) {
@@ -94,6 +100,26 @@ export function goalProgress(series, targetPounds) {
   };
 }
 
+// Progress tab: reached goals (achieved or relapsed) plus the next pending
+// milestone for weight loss. Highest pounds first; further pending goals stay hidden.
+export function progressGoals(goals, series) {
+  const sorted = [...goals].sort((a, b) =>
+    a.pounds !== b.pounds ? b.pounds - a.pounds : a.id < b.id ? -1 : 1,
+  );
+  const visible = [];
+  let includePending = true;
+  for (const goal of sorted) {
+    const state = goalProgress(series, goal.pounds).state;
+    if (state === "achieved" || state === "relapsed") {
+      visible.push(goal);
+    } else if (includePending) {
+      visible.push(goal);
+      includePending = false;
+    }
+  }
+  return visible;
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(`weight: ${message}`);
 }
@@ -103,6 +129,9 @@ function assertClose(actual, expected, message) {
 }
 
 function selfCheck() {
+  assert(latestTrend([]) === null, "empty logs have no trend");
+  assertClose(latestTrend([{ dateKey: "2026-10-08", pounds: 200 }]), 200, "single weigh-in trend");
+
   const series = trendSeries([
     { dateKey: "2026-10-03", pounds: 198 },
     { dateKey: "2026-10-01", pounds: 200 },
@@ -112,6 +141,11 @@ function selfCheck() {
   assertClose(series[0].trend, 200, "first trend is the weight");
   assertClose(series[1].trend, 199.9, "second trend");
   assertClose(series[2].trend, 199.71, "third trend");
+  assertClose(latestTrend([
+    { dateKey: "2026-10-03", pounds: 198 },
+    { dateKey: "2026-10-01", pounds: 200 },
+    { dateKey: "2026-10-02", pounds: 199 },
+  ]), 199.71, "latest trend follows sorted series");
 
   const week = trendSeries([
     { dateKey: "2026-10-01", pounds: 200 },
@@ -187,6 +221,36 @@ function selfCheck() {
 
   const already = goalProgress(trendSeries([{ dateKey: "2026-01-01", pounds: 180 }]), 180);
   assert(already.state === "achieved" && already.days === 0, "start at target");
+
+  const ladder = [
+    { id: "a", pounds: 190 },
+    { id: "b", pounds: 180 },
+    { id: "c", pounds: 170 },
+  ];
+  assert(progressGoals([], reach).length === 0, "no goals stays empty");
+  assert(
+    progressGoals(ladder, []).map((goal) => goal.pounds).join() === "190",
+    "no weigh-ins shows only the next (highest) goal",
+  );
+  // trends: 200, 190 — 190 achieved, 180 next, 170 hidden
+  assert(
+    progressGoals(ladder, reach).map((goal) => goal.pounds).join() === "190,180",
+    "mid-ladder shows reached plus next pending",
+  );
+  const done = trendSeries([
+    { dateKey: "2026-01-01", pounds: 200 },
+    { dateKey: "2026-01-02", pounds: 0 },
+    { dateKey: "2026-01-03", pounds: 0 },
+  ]);
+  // trends: 200, 180, 162 — all three targets reached
+  assert(
+    progressGoals(ladder, done).map((goal) => goal.pounds).join() === "190,180,170",
+    "all reached lists high to low",
+  );
+  assert(
+    progressGoals(ladder, bounce).map((goal) => goal.pounds).join() === "190,180",
+    "relapsed still counts as reached; next pending follows",
+  );
 }
 
 selfCheck();

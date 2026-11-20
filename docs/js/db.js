@@ -924,20 +924,37 @@ export function validProfile(profile) {
   if (!isPositiveInt(profile.heightIn) || profile.heightIn < BODY_LIMITS.heightMin || profile.heightIn > BODY_LIMITS.heightMax) {
     return false;
   }
-  if (typeof profile.weightLb !== "number" || !Number.isFinite(profile.weightLb)) return false;
-  if (profile.weightLb < BODY_LIMITS.weightMin || profile.weightLb > BODY_LIMITS.weightMax) return false;
   if (activityFactor(profile.activity) == null) return false;
   return LOSS_RATES.includes(profile.lbPerWeek);
 }
 
-export function setTarget(effectiveDate, calories, profile) {
-  const record = { effectiveDate, calories };
-  if (profile) {
+// Explicit mode wins. Legacy records: a body profile means calculated, otherwise manual.
+export function targetMode(record) {
+  if (!record) return null;
+  if (record.mode === "manual" || record.mode === "calculated") return record.mode;
+  return profileFromTarget(record) ? "calculated" : "manual";
+}
+
+export function profileFromTarget(record) {
+  if (!record) return null;
+  const profile = {
+    sex: record.sex,
+    age: record.age,
+    heightIn: record.heightIn,
+    lbPerWeek: record.lbPerWeek,
+    activity: record.activity == null ? "sedentary" : record.activity,
+  };
+  return validProfile(profile) ? profile : null;
+}
+
+export function setTarget(effectiveDate, calories, profile = null, mode = "manual") {
+  const resolved = mode === "calculated" ? "calculated" : "manual";
+  const record = { effectiveDate, calories, mode: resolved };
+  if (resolved === "calculated") {
     if (!validProfile(profile)) return Promise.reject(new Error("Invalid body profile."));
     record.sex = profile.sex;
     record.age = profile.age;
     record.heightIn = profile.heightIn;
-    record.weightLb = profile.weightLb;
     record.lbPerWeek = profile.lbPerWeek;
     record.activity = profile.activity;
   }
@@ -954,8 +971,8 @@ export function setTarget(effectiveDate, calories, profile) {
 export async function ensureDefaultTarget(dateKey = todayKey()) {
   const targets = await getTargets();
   if (targets.length > 0) return targets;
-  await setTarget(dateKey, 2000);
-  return [{ effectiveDate: dateKey, calories: 2000 }];
+  await setTarget(dateKey, 2000, null, "manual");
+  return [{ effectiveDate: dateKey, calories: 2000, mode: "manual" }];
 }
 
 export function exportAll() {
@@ -1204,19 +1221,32 @@ function copyTarget(raw, index) {
   if (!raw || typeof raw !== "object") fail(`Calorie target ${index} is not an object.`);
   if (!isDateKey(raw.effectiveDate)) fail(`Calorie target ${index} has an invalid date.`);
   if (!isPositiveInt(raw.calories)) fail(`Calorie target ${index} has an invalid calorie value.`);
-  const target = { effectiveDate: raw.effectiveDate, calories: raw.calories };
-  const keys = ["sex", "age", "heightIn", "weightLb", "lbPerWeek", "activity"];
-  if (!keys.some((key) => raw[key] != null)) return target;
+  if (raw.mode != null && raw.mode !== "manual" && raw.mode !== "calculated") {
+    fail(`Calorie target ${index} has an invalid mode.`);
+  }
+  if (raw.mode === "manual") {
+    return { effectiveDate: raw.effectiveDate, calories: raw.calories, mode: "manual" };
+  }
+  const keys = ["sex", "age", "heightIn", "lbPerWeek", "activity"];
+  const hasProfile = keys.some((key) => raw[key] != null);
+  if (!hasProfile) {
+    if (raw.mode === "calculated") fail(`Calorie target ${index} is calculated but has no body profile.`);
+    return { effectiveDate: raw.effectiveDate, calories: raw.calories, mode: "manual" };
+  }
   const profile = {
     sex: raw.sex,
     age: raw.age,
     heightIn: raw.heightIn,
-    weightLb: raw.weightLb,
     lbPerWeek: raw.lbPerWeek,
     activity: raw.activity == null ? "sedentary" : raw.activity,
   };
   if (!validProfile(profile)) fail(`Calorie target ${index} has an invalid body profile.`);
-  return { ...target, ...profile };
+  return {
+    effectiveDate: raw.effectiveDate,
+    calories: raw.calories,
+    mode: "calculated",
+    ...profile,
+  };
 }
 
 function copyWeight(raw, index) {
@@ -1562,6 +1592,67 @@ function selfCheckImport() {
   assertImport(parsePounds("700") === 700, "allow the maximum");
   assertImport(parsePounds("180.55") === null, "reject two decimals");
   assertImport(parsePounds("69.9") === null, "reject under the minimum");
+
+  assertImport(validProfile({ sex: "male", age: 40, heightIn: 72, lbPerWeek: 1, activity: "sedentary" }), "profile needs no weight");
+  assertImport(targetMode({ calories: 2000 }) === "manual", "legacy calories-only is manual");
+  assertImport(
+    targetMode({
+      calories: 1800,
+      sex: "female",
+      age: 30,
+      heightIn: 64,
+      lbPerWeek: 1,
+      activity: "light",
+    }) === "calculated",
+    "legacy profile is calculated",
+  );
+  assertImport(targetMode({ calories: 1900, mode: "manual", sex: "male" }) === "manual", "explicit manual wins");
+
+  const calcImport = validateImport({
+    schemaVersion: 4,
+    foods: [],
+    entries: [],
+    targets: [
+      {
+        effectiveDate: "2026-01-01",
+        calories: 1800,
+        mode: "calculated",
+        sex: "male",
+        age: 40,
+        heightIn: 72,
+        lbPerWeek: 1,
+        activity: "sedentary",
+      },
+    ],
+    weights: [],
+    foodComponents: [],
+    weightGoals: [],
+  });
+  assertImport(calcImport.targets[0].mode === "calculated", "import calculated mode");
+  assertImport(calcImport.targets[0].weightLb == null, "import drops settings weight");
+
+  const legacyWeight = validateImport({
+    schemaVersion: 4,
+    foods: [],
+    entries: [],
+    targets: [
+      {
+        effectiveDate: "2026-01-01",
+        calories: 1800,
+        sex: "male",
+        age: 40,
+        heightIn: 72,
+        weightLb: 200,
+        lbPerWeek: 1,
+        activity: "sedentary",
+      },
+    ],
+    weights: [],
+    foodComponents: [],
+    weightGoals: [],
+  });
+  assertImport(legacyWeight.targets[0].mode === "calculated", "legacy profile gets calculated mode");
+  assertImport(legacyWeight.targets[0].weightLb == null, "legacy weightLb is ignored");
 }
 
 function selfCheckServing() {
