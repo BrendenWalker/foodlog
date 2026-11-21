@@ -1252,6 +1252,7 @@ async function openSelect() {
   $("select-category").value = "";
   show("select");
   renderSelectList();
+  window.scrollTo(0, 0);
   await refreshStatus();
 }
 
